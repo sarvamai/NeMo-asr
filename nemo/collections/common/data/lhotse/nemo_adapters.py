@@ -402,6 +402,12 @@ class LazyNeMoTarredIterator:
             tar_path = self.shard_id_to_tar_path[sid]
             try:
                 for data, raw_audio, tar_info in self._iter_sequential(tar_path, shard_manifest, manifest_path):
+                    from soundfile import LibsndfileError
+                    try:
+                        meta = soundfile.info(BytesIO(raw_audio))
+                    except LibsndfileError as e:
+                        print(f"Error in soundfile.info: {e}")
+                        continue
                     meta = soundfile.info(BytesIO(raw_audio))
                     recording = Recording(
                         id=tar_info.path,

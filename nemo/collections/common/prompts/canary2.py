@@ -29,7 +29,9 @@ from nemo.collections.common.tokenizers.canary_tokenizer import (
     CANARY_SPECIAL_TOKENIZER,
     CanaryTokenizer,
 )
-
+from nemo.collections.common.tokenizers.canary_multilingual_tokenizer import (
+    CanaryMultilingualTokenizer,
+)
 # Use global variables to import slot values in other modules.
 ITN_TRUE = BOOL_TRUE | {
     "itn",
@@ -179,7 +181,7 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
         ),
     )
     ans = prompt.encode_dialog(turns)
-    if isinstance(prompt.tokenizer, CanaryTokenizer):
+    if isinstance(prompt.tokenizer, CanaryTokenizer) or isinstance(prompt.tokenizer, CanaryMultilingualTokenizer):
         eos = prompt.tokenizer.eos
     else:  # SPE
         eos = prompt.tokenizer.token_to_id(CANARY_EOS)

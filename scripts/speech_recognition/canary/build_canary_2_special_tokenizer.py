@@ -31,6 +31,8 @@ def main(output_dir: str) -> None:
     tokens = (
         [
             # Generic special tokens
+            "<|transcribe|>",
+            "<|translate|>",
             "<|endoftext|>",
             "<|startoftranscript|>",
             "<|nopnc|>",

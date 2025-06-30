@@ -174,6 +174,141 @@ parser.add_argument("--log", action='store_true')
 parser.set_defaults(log=False, lower_case=True, spe_train_extremely_large_corpus=False)
 args = parser.parse_args()
 
+# function to build document from manifest of the format: # manifest_file="/data/ASR/lhotse/manifests/train_data_shar-$lang-lf/cuts.{000000..000171}.jsonl.gz"
+def expand_brace_pattern(pattern):
+    """
+    Expand bash brace expansion patterns like {000000..000171}
+    using Python implementation.
+    """
+    # Pattern to match brace expansion like {000000..000171}
+    brace_pattern = r'\{(\d+)\.\.(\d+)\}'
+    
+    def expand_brace_match(match):
+        start_str = match.group(1)
+        end_str = match.group(2)
+        
+        # Determine if we need zero-padding
+        start_num = int(start_str)
+        end_num = int(end_str)
+        pad_length = len(start_str)  # Use length of start string for padding
+        
+        # Generate the range with proper zero-padding
+        expanded = []
+        for i in range(start_num, end_num + 1):
+            expanded.append(str(i).zfill(pad_length))
+        
+        return expanded
+    
+    # Find brace patterns in the input
+    matches = list(re.finditer(brace_pattern, pattern))
+    
+    if not matches:
+        # No brace patterns found, use regular glob
+        return glob.glob(pattern)
+    
+    # Handle multiple brace patterns by expanding them one by one
+    result_patterns = [pattern]
+    
+    for match in reversed(matches):  # Process from right to left to maintain indices
+        new_patterns = []
+        for current_pattern in result_patterns:
+            # Find the brace pattern in current_pattern
+            current_matches = list(re.finditer(brace_pattern, current_pattern))
+            if current_matches:
+                # Take the first match (should be the one we're processing)
+                current_match = current_matches[-1]  # Take the last one since we're going right to left
+                expanded_values = expand_brace_match(current_match)
+                
+                # Replace the brace pattern with each expanded value
+                for value in expanded_values:
+                    new_pattern = (current_pattern[:current_match.start()] + 
+                                 value + 
+                                 current_pattern[current_match.end():])
+                    new_patterns.append(new_pattern)
+            else:
+                new_patterns.append(current_pattern)
+        
+        result_patterns = new_patterns
+    
+    # Filter to only existing files
+    existing_files = []
+    for expanded_pattern in result_patterns:
+        if '*' in expanded_pattern or '?' in expanded_pattern:
+            # If still contains wildcards, use glob
+            existing_files.extend(glob.glob(expanded_pattern))
+        else:
+            # Check if file exists
+            from pathlib import Path
+            if Path(expanded_pattern).exists():
+                existing_files.append(expanded_pattern)
+    
+    return existing_files
+
+def __build_document_from_shar_manifest(
+    data_root: str,
+    manifests: List[str],
+):
+    print("Building document from shar manifests")
+    document_dir = os.path.join(data_root, 'text_corpus')
+    if not os.path.exists(document_dir):
+        os.makedirs(document_dir)
+
+    document_path = os.path.join(document_dir, 'document.txt')
+
+    if os.path.exists(document_path):
+        logging.info('Corpus already exists at path : %s', document_path)
+        return document_path
+
+    manifest_files = []
+    # Expand the glob pattern to get all matching files
+    for manifest in manifests:
+        if '{' in manifest and '}' in manifest:
+            # Use brace expansion for patterns like {000000..000171}
+            manifest_files.extend(expand_brace_pattern(manifest))
+        else:
+            # Use standard glob for other patterns
+            manifest_files.extend(glob.glob(manifest))
+    
+    if not manifest_files:
+        raise ValueError(f"No files found matching pattern: {manifest}")
+    
+    print("$$$$$$$$$$$$$$$")
+    print("Got a total of {} manifest files".format(len(manifest_files)))
+    print(manifest_files)
+    print("$$$$$$$$$$$$$$$")
+    num_lines = 0
+    with open(document_path, 'w') as out_writer:
+        for manifest_file in sorted(manifest_files):
+            logging.info(f"Processing manifest file: {manifest_file}")
+            
+            if manifest_file.endswith('.gz'):
+                import gzip
+                open_func = gzip.open
+                mode = 'rt'
+            else:
+                open_func = open
+                mode = 'r'
+            
+            with open_func(manifest_file, mode) as in_reader:
+                for line in in_reader:
+                    item = json.loads(line)
+                    
+                    # Handle different possible text field names in lhotse cuts
+                    text = None
+                    if 'supervisions' in item and len(item['supervisions']) > 0:
+                        text = item['supervisions'][0].get('text', '')
+                    elif 'text' in item:
+                        text = item['text']
+                    
+                    if text:
+                        out_writer.write(text + '\n')
+                        out_writer.flush()
+                        num_lines += 1
+
+            logging.info(f"Finished extracting manifest file: {manifest_file}")
+
+    logging.info("Finished extracting all manifest files! Number of sentences: {}".format(num_lines))
+    return document_path
 
 def __build_document_from_manifests(
     data_root: str,
@@ -183,6 +318,9 @@ def __build_document_from_manifests(
         manifests = manifests.split(',')
     else:
         manifests = [manifests]
+
+    if 'jsonl.gz' in manifests[0]:
+        return __build_document_from_shar_manifest(data_root, manifests)
 
     document_dir = os.path.join(data_root, 'text_corpus')
     if not os.path.exists(document_dir):

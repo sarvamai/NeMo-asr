@@ -58,6 +58,18 @@ class FixedPositionalEncoding(nn.Module):
         self.register_buffer('pos_enc', pos_enc)
 
     def forward(self, position_ids):
+        # [<srta>, <lid>, <t1>, 4, 5]
+        # [0, 1, 2, 3, 4]
+        # [1, 2, 3, 4]
+        # clip position_ids to max_sequence_length
+        if position_ids.max() >= self._max_sequence_length:
+            print(f"position_ids.max() >= self._max_sequence_length: {position_ids.max()} >= {self._max_sequence_length}")
+            position_ids = position_ids.clamp(max=self._max_sequence_length - 1)
+            # position_ids = position_ids[..., -self._max_sequence_length:]
+            print(f"position_ids: {position_ids}")
+            print(f"position_ids.max(): {position_ids.max()}")
+            print(f"max_sequence_length: {self._max_sequence_length}")
+            print(f"self.pos_enc: {self.pos_enc}")
         embeddings = torch.embedding(self.pos_enc, position_ids)
         return embeddings
 
