@@ -146,6 +146,20 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
             f"Expected input audio to have a single channel (required MonoCut/MixedCut, but we received: {cut=})"
         )
 
+    expected_slots = {"source_lang", "target_lang"}
+    missing_keys = expected_slots - set(cut.custom)
+    if missing_keys:
+        # fix for missing source_lang
+        language = cut.supervisions[0].language
+        language = language.lower()
+        source_lang = language
+        target_lang = language
+        # add to cut.custom
+        # TODO: This needs to be fixed as this won't work for the translation task
+        cut.custom["source_lang"] = source_lang
+        cut.custom["target_lang"] = target_lang
+        cut.custom["prompt_language"] = target_lang
+
     # first, validate the utterance
     expected_slots = {"source_lang", "target_lang"}
     missing_keys = expected_slots - set(cut.custom)
