@@ -15,7 +15,7 @@
 #
 # a typical training manifest entry looks like this - 
 # {"audio_filepath": "/path/to/audio/file.wav", "duration": 16.192, "text": "Text spoken in the audio.", "source_lang": "en", "target_lang": "en", "taskname": "asr", "pnc": "yes"}
-name: "canary-flash-cloud-lepton-v1"
+name: "canary-flash-edge-lepton-v1"
 # Note: for larger models (1B+ params) initializing from a pretrained encoder
 #  may help (or even be required to) stabilize the training.
 init_from_nemo_model:
@@ -55,8 +55,8 @@ model:
       slots:
         decodercontext: ""
   model_defaults:
-    asr_enc_hidden: 1024
-    lm_enc_hidden: 1024
+    asr_enc_hidden: 512
+    lm_enc_hidden: 512
     lm_dec_hidden: 1024
   train_ds:
     input_cfg:
@@ -444,50 +444,30 @@ model:
         max_open_streams: null
         tags:
           lang: pa
-    # use_lhotse: true
-    # skip_missing_manifest_entries: true
-    # sample_rate: ${model.sample_rate}
-    # shuffle: true
-    # num_workers: 8
-    # is_tarred: true
-    # # To understand the settings below, please refer to Lhotse Dataloading documentation:
-    # # https://github.com/NVIDIA/NeMo/blob/main/docs/source/asr/datasets.rst#lhotse-dataloading
-    # # You can also check the following configuration dataclass:
-    # # https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/data/lhotse/dataloader.py#L36
-    # batch_size: null
-    # batch_duration: 360
-    # quadratic_duration: 15
-    # use_bucketing: True
-    # num_buckets: 4
-    # shard_manifests: true
-    # defer_setup: true
-    # bucket_buffer_size: 10000
-    # shuffle_buffer_size: 5000
-    # text_field: "text"
-    # lang_field: "target_lang"
-    # channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
-    #   #    bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
-    #   #    bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
-    # bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
-    # bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
-    # >>>>>>>>>>>>
     use_lhotse: true
     skip_missing_manifest_entries: true
     sample_rate: ${model.sample_rate}
     shuffle: true
-    is_tarred: true
     num_workers: 16
-    batch_size: 16
-    bucketing_strategy: "synced_randomized"
-    concat_sampling_technique: "temperature"
-    concat_sampling_temperature: 2.0
-    defer_setup: true
-    is_concat: true
-    max_duration: 400
-    min_duration: 0.025
-    pin_memory: true
+    is_tarred: true
+    # To understand the settings below, please refer to Lhotse Dataloading documentation:
+    # https://github.com/NVIDIA/NeMo/blob/main/docs/source/asr/datasets.rst#lhotse-dataloading
+    # You can also check the following configuration dataclass:
+    # https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/data/lhotse/dataloader.py#L36
+    batch_size: null
+    batch_duration: 740
+    quadratic_duration: 15
+    use_bucketing: True
+    num_buckets: 4
     shard_manifests: true
-    shuffle_n: 2048
+    defer_setup: true
+    bucket_buffer_size: 20000
+    shuffle_buffer_size: 10000
+    text_field: "text"
+    lang_field: "target_lang"
+    channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
+    bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
+    bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
   validation_ds:
     input_cfg:
       - type: lhotse_shar
@@ -582,8 +562,8 @@ model:
           lang: gu
     use_lhotse: true
     sample_rate: ${model.sample_rate}
-    num_workers: 1
-    batch_size: 1  # you can keep this or adjust based on your GPU memory
+    num_workers: 4
+    batch_size: 64  # you can keep this or adjust based on your GPU memory
     use_bucketing: false  # typically not needed for validation
     shard_manifests: false  # FIXED: Disabled sharding for validation
     defer_setup: false      # FIXED: Setup immediately to avoid lazy loading issues
@@ -650,7 +630,7 @@ model:
     _target_: nemo.collections.asr.modules.ConformerEncoder
     feat_in: ${model.preprocessor.features}
     feat_out: -1 # you may set it if you need different output size other than the default d_model
-    n_layers: 32
+    n_layers: 17
     d_model: ${model.model_defaults.asr_enc_hidden}
     # Sub-sampling params
     subsampling: dw_striding # vggnet or striding, vggnet may give better results but needs more memory
@@ -706,7 +686,7 @@ model:
       learn_positional_encodings: false
       hidden_size: ${model.model_defaults.lm_dec_hidden}
       inner_size: ${multiply:${model.model_defaults.lm_dec_hidden}, 4}
-      num_layers: 24
+      num_layers: 4
       num_attention_heads: 8
       ffn_dropout: 0.1
       attn_score_dropout: 0.1
@@ -739,7 +719,7 @@ model:
     pad_id: null
   optim:
     name: adamw
-    lr: 1e-4
+    lr: 3e-4
     # optimizer arguments
     betas: [0.9, 0.98]
     # less necessity for weight_decay as we already have large augmentations with SpecAug
@@ -756,11 +736,10 @@ model:
       min_lr: 1e-6
 trainer:
   devices: 8 # number of GPUs, -1 would use all available GPUs
-  num_nodes: 8
+  num_nodes: 4
   max_epochs: -1
   max_steps: 400000 # computed at runtime if not set
-  # val_check_interval: 1.0 # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
-  val_check_interval: 5000 # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  val_check_interval: 1.0 # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
   accelerator: auto
   strategy:
     _target_: lightning.pytorch.strategies.DDPStrategy
@@ -779,7 +758,7 @@ trainer:
 exp_manager:
   # exp_dir: /data/mayur_sarvam_ai/nemo_checkpoint
   exp_dir: null
-  explicit_log_dir: /data/ASR/aviral/LOGS/CANARY/canary-flash-cloud-lepton-v1
+  explicit_log_dir: /data/ASR/aviral/LOGS/CANARY/canary-flash-edge-lepton-v1
   # default: exp_dir: ~/nemo_checkpoint
   name: ${name}
   create_tensorboard_logger: true
@@ -798,5 +777,5 @@ exp_manager:
   # You may use this section to create a W&B logger
   create_wandb_logger: true
   wandb_logger_kwargs:
-    name: canary-flash-cloud-lepton-v1
+    name: canary-flash-edge-lepton-v1
     project: Canary-flash
