@@ -731,7 +731,7 @@ model:
       # name: InverseSquareRootAnnealing
       name: CosineAnnealing
       # scheduler config override
-      warmup_steps: 40000
+      warmup_steps: 5000
       warmup_ratio: null
       min_lr: 1e-6
 trainer:
