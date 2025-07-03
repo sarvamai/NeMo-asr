@@ -1,0 +1,782 @@
+# It contains the default values for training an autoregressive FastConformer-Transformer AED model with sub-word encoding.
+# Architecture and training config:
+# Default learning parameters in this config are set for effective batch size of 2K. To train it with smaller effective
+# batch sizes, you may need to re-tune the learning parameters or use higher accumulate_grad_batches.
+# Here are the recommended configs for different variants of FastConformer-Transformer, other parameters are the same as in this config file.
+# One extra (linear projection) layer is added between FastConformer encoder and Transformer decoder if they have different hidden sizes
+# It is recommended to initialize FastConformer with ASR/SSL pre-trained encoder for better accuracy and faster convergence
+# Canary model family
+# |         Model        | Num Params |  encoder.n_layers | transf_decoder.config_dict.num_layers | transf_decoder.config_dict.max_sequence_length | model_defaults.asr_enc_hidden | model_defaults.lm_dec_hidden |
+# |:--------------------:|:----------:|:-----------------:|:-------------------------------------:|:----------------------------------------------:|:-----------------------------:|:----------------------------:|
+# |      canary-1b       |     1B     |        24         |                     24                |                        512                     |              1024             |             1024             |
+# |   canary-1b-flash    |    883M    |        32         |                     4                 |                       1024                     |              1024             |             1024             |
+# |  canary-180m-flash   |    182M    |        17         |                     4                 |                       1024                     |               512             |             1024             |
+# |  whisper large       |    1.5B    |        32         |                     32                |                       1024                     |               1024            |             1024             |
+#
+# a typical training manifest entry looks like this - 
+# {"audio_filepath": "/path/to/audio/file.wav", "duration": 16.192, "text": "Text spoken in the audio.", "source_lang": "en", "target_lang": "en", "taskname": "asr", "pnc": "yes"}
+name: "canary-flash-cloud-lepton-v1"
+# Note: for larger models (1B+ params) initializing from a pretrained encoder
+#  may help (or even be required to) stabilize the training.
+init_from_nemo_model:
+  model0:
+    path: "<>"
+    # exclude: ["transf_decoder._embedding.token_embedding", "log_softmax.mlp.layer0"]
+# init_exclude: ["transf_decoder._embedding.token_embedding", "log_softmax.mlp.layer0"]
+init_strict: false
+# If using example training script, below will be used to instantiate spl_tokens tokenizer.
+# Similar can be done by calling CanaryTokenizer.build_special_tokenizer(tokens, output_dir).
+# If a tokenizer exists in dir, will skip building and use already built tokenizer.
+# spl_tokens:
+#   model_dir: '/data/mayur_sarvam_ai/data/nemo/tokenizer/spl_tokens'
+#   tokens: ["translate", "transcribe", "en", "es", "de", "fr", "hi", "gu", "mr", "kn", "ml", "ta", "te", "bn", "od", "pa"]
+#   force_rebuild: False  # Set to True to build new tokenizer each time.
+
+model:
+  sample_rate: 16000
+  label_smoothing: 0.0
+  use_loss_mask_for_prompt: false
+  log_prediction: true # enables logging sample predictions in the output during training
+
+  # Important ! Set the prompt format to the class you need
+  prompt_format: "canary2"   # Options supported: ["canary", "canary2"]
+  prompt_defaults:
+    - role: user
+      slots:
+        decodercontext: ""
+        source_lang: <|en|>
+        target_lang: <|en|>
+        emotion: <|emo:undefined|>
+        pnc: <|pnc|>
+        itn: <|noitn|>
+        diarize: <|nodiarize|>
+        timestamp: <|notimestamp|>
+    - role: user_partial
+      slots:
+        decodercontext: ""
+  model_defaults:
+    asr_enc_hidden: 1024
+    lm_enc_hidden: 1024
+    lm_dec_hidden: 1024
+  train_ds:
+    input_cfg:
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-gu-lf/cuts.{000000..000079}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-gu-lf/recording.{000000..000079}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: gu
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-mr-lf/cuts.{000000..000147}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-mr-lf/recording.{000000..000147}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: mr
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-kn-lf/cuts.{000000..000135}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-kn-lf/recording.{000000..000135}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: kn
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ml-lf/cuts.{000000..000068}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-ml-lf/recording.{000000..000068}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ml
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ta-lf/cuts.{000000..000092}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-ta-lf/recording.{000000..000092}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ta
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-te-lf/cuts.{000000..000101}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-te-lf/recording.{000000..000101}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: te
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-bn-lf/cuts.{000000..000157}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-bn-lf/recording.{000000..000157}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: bn
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-lf/cuts.{000000..000062}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-od-lf/recording.{000000..000062}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: od
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-hi-lf/cuts.{000000..000202}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-hi-lf/recording.{000000..000202}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: hi
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-pa-lf/cuts.{000000..000041}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-pa-lf/recording.{000000..000041}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: pa
+      - type: lhotse_shar
+        weight: 0.2
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-en-lf/cuts.{000000..000171}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-en-lf/recording.{000000..000171}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: en
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-gu-sf/cuts.{000000..000189}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-gu-sf/recording.{000000..000189}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: gu
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-mr-sf/cuts.{000000..000351}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-mr-sf/recording.{000000..000351}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: mr
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-kn-sf/cuts.{000000..000339}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-kn-sf/recording.{000000..000339}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: kn
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ml-sf/cuts.{000000..000179}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-ml-sf/recording.{000000..000179}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ml
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ta-sf/cuts.{000000..000127}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-ta-sf/recording.{000000..000127}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ta
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-te-sf/cuts.{000000..000336}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-te-sf/recording.{000000..000336}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: te
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-bn-sf/cuts.{000000..000233}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-bn-sf/recording.{000000..000233}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: bn
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-sf/cuts.{000000..000179}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-od-sf/recording.{000000..000179}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: od
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-hi-sf/cuts.{000000..000654}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-hi-sf/recording.{000000..000654}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: hi
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-pa-sf/cuts.{000000..000103}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-pa-sf/recording.{000000..000103}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: pa
+      - type: lhotse_shar
+        weight: 0.7
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-en-sf/cuts.{000000..000225}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-en-sf/recording.{000000..000225}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: en
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-gu-vpp/cuts.{000000..000015}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-gu-vpp/recording.{000000..000015}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: gu
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-mr-vpp/cuts.{000000..000031}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-mr-vpp/recording.{000000..000031}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: mr
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-kn-vpp/cuts.{000000..000028}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-kn-vpp/recording.{000000..000028}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: kn
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ml-vpp/cuts.{000000..000020}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-ml-vpp/recording.{000000..000020}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ml
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-ta-vpp/cuts.{000000..000049}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-ta-vpp/recording.{000000..000049}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: ta
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-te-vpp/cuts.{000000..000023}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-te-vpp/recording.{000000..000023}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: te
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-bn-vpp/cuts.{000000..000042}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-bn-vpp/recording.{000000..000042}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: bn
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-vpp/cuts.{000000..000020}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-od-vpp/recording.{000000..000020}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: od
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-hi-vpp/cuts.{000000..000046}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-hi-vpp/recording.{000000..000046}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: hi
+      - type: lhotse_shar
+        weight: 0.1
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-pa-vpp/cuts.{000000..000016}.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-pa-vpp/recording.{000000..000016}.tar"
+        shuffle: true
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: false
+        max_open_streams: null
+        tags:
+          lang: pa
+    use_lhotse: true
+    skip_missing_manifest_entries: true
+    sample_rate: ${model.sample_rate}
+    shuffle: true
+    num_workers: 16
+    # is_tarred: true
+    # To understand the settings below, please refer to Lhotse Dataloading documentation:
+    # https://github.com/NVIDIA/NeMo/blob/main/docs/source/asr/datasets.rst#lhotse-dataloading
+    # You can also check the following configuration dataclass:
+    # https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/data/lhotse/dataloader.py#L36
+    batch_size: null
+    batch_duration: 360
+    quadratic_duration: 15
+    use_bucketing: True
+    num_buckets: 4
+    shard_manifests: true
+    defer_setup: true
+    bucket_buffer_size: 20000
+    shuffle_buffer_size: 10000
+    text_field: "text"
+    lang_field: "target_lang"
+    channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
+    bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
+    bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
+  validation_ds:
+    input_cfg:
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-gu-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-gu-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: mr
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-kn-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-kn-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: kn
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-ml-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-ml-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: ml
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-ta-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-ta-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: ta
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-te-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-te-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: te
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-bn-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-bn-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: bn
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-od-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-od-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: od
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-hi-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-hi-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: hi
+      - type: lhotse_shar
+        shar_path:
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-gu-vpp/cuts.000000.jsonl.gz"
+          recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-gu-vpp/recording.000000.tar"
+        shard_seed: "trng"
+        metadata_only: false
+        force_finite: true    # FIXED: Forces complete shar loading
+        max_open_streams: null
+        tags:
+          lang: gu
+    use_lhotse: true
+    sample_rate: ${model.sample_rate}
+    num_workers: 4
+    batch_size: 16  # you can keep this or adjust based on your GPU memory
+    use_bucketing: false  # typically not needed for validation
+    shard_manifests: false  # FIXED: Disabled sharding for validation
+    defer_setup: false      # FIXED: Setup immediately to avoid lazy loading issues
+    text_field: "text"
+    lang_field: "target_lang"
+    channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
+    pin_memory: true
+    use_start_end_token: true
+    shuffle: false
+    metadata_only: false
+    force_finite: true
+  test_ds:
+    use_lhotse: true
+    manifest_filepath: "/data/ASR/lhotse_train/manifest/val_cuts-mr-sf.json"
+    sample_rate: ${model.sample_rate}
+    batch_size: 8 # you may increase batch_size if your memory allows
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+    use_start_end_token: true
+    use_bucketing: false
+    channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
+  # recommend small vocab size of 128 or 256 when using 4x sub-sampling
+  # you may find more detail on how to train a tokenizer at: /scripts/tokenizers/process_asr_text_tokenizer.py
+  tokenizer:
+    dir: null # Null for aggregate tokenizers
+    tokenizer_root: /data/ASR/aviral/canary/v1/tokenizer
+    type: agg # Can be either bpe (SentencePiece tokenizer) or wpe (WordPiece tokenizer) or `agg` for aggregate tokenizers
+    langs:
+      spl_tokens: # special tokens model
+        dir: ${model.tokenizer.tokenizer_root}/spl_tokens
+        type: bpe
+      multilingual:
+        dir: ${model.tokenizer.tokenizer_root}/multilingual/tokenizer_spe_bpe_v6000
+        type: bpe
+    custom_tokenizer:
+      _target_: nemo.collections.common.tokenizers.canary_multilingual_tokenizer.CanaryMultilingualTokenizer # Can be replaced with other tokenizer
+      tokenizers: null # Filled at runtime by all the tokenizers inside the aggregate tokenizer
+  # Audio Preprocessor
+  preprocessor:
+    _target_: nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor
+    sample_rate: ${model.sample_rate}
+    normalize: "per_feature"
+    window_size: 0.025
+    window_stride: 0.01
+    window: "hann"
+    features: 128
+    n_fft: 512
+    log: true
+    frame_splicing: 1
+    dither: 0.00001
+    pad_to: 0
+    pad_value: 0.0
+  # SpecAugment is applied either in the model or in the data layer
+  spec_augment:
+    _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+    freq_masks: 2 # set to zero to disable it
+    # you may use lower time_masks for smaller models to have a faster convergence
+    time_masks: 10 # set to zero to disable it
+    freq_width: 27
+    time_width: 0.05
+  # FastConformer Encoder
+  encoder:
+    _target_: nemo.collections.asr.modules.ConformerEncoder
+    feat_in: ${model.preprocessor.features}
+    feat_out: -1 # you may set it if you need different output size other than the default d_model
+    n_layers: 32
+    d_model: ${model.model_defaults.asr_enc_hidden}
+    # Sub-sampling params
+    subsampling: dw_striding # vggnet or striding, vggnet may give better results but needs more memory
+    subsampling_factor: 8 # must be power of 2
+    subsampling_conv_channels: 256 # -1 sets it to d_model
+    causal_downsampling: false
+    reduction: null
+    reduction_position: null
+    reduction_factor: 1
+    # Feed forward module's params
+    ff_expansion_factor: 4
+    # Multi-headed Attention Module's params
+    self_attention_model: rel_pos # rel_pos or abs_pos
+    n_heads: 8 # may need to be lower for smaller d_models
+    # [left, right] specifies the number of steps to be seen from left and right of each step in self-attention
+    att_context_size: [-1, -1] # -1 means unlimited context
+    xscaling: false # scales up the input embeddings by sqrt(d_model)
+    untie_biases: true # unties the biases of the TransformerXL layers
+    pos_emb_max_len: 5000
+    # Convolution module's params
+    conv_kernel_size: 9
+    conv_norm_type: batch_norm
+    conv_context_size: null
+    ### regularization
+    dropout: 0.1 # The dropout used in most of the Conformer Modules
+    dropout_pre_encoder: 0.1
+    dropout_emb: 0.0 # The dropout used for embeddings
+    dropout_att: 0.1 # The dropout for multi-headed attention modules
+  # Optional Transformer Encoder sandwitched between ASR Encoder and Transformer Ddcoder.
+  # Only used if num_layers > 0
+  transf_encoder:
+    _target_: nemo.collections.asr.modules.transformer.transformer_encoders.TransformerEncoder
+    num_layers: 0
+    hidden_size: ${model.model_defaults.lm_enc_hidden}
+    inner_size: ${multiply:${model.model_defaults.lm_enc_hidden}, 4}
+    num_attention_heads: 8
+    ffn_dropout: 0.1
+    attn_score_dropout: 0.1
+    attn_layer_dropout: 0.1
+    mask_future: False
+    pre_ln: True
+    pre_ln_final_layer_norm: True
+  transf_decoder:
+    _target_: nemo.collections.asr.modules.transformer.get_nemo_transformer
+    model_name: null
+    pretrained: false
+    encoder: null
+    pre_ln_final_layer_norm: true
+    config_dict:
+      max_sequence_length: 1024
+      num_token_types: 0
+      embedding_dropout: 0.1
+      learn_positional_encodings: false
+      hidden_size: ${model.model_defaults.lm_dec_hidden}
+      inner_size: ${multiply:${model.model_defaults.lm_dec_hidden}, 4}
+      num_layers: 24
+      num_attention_heads: 8
+      ffn_dropout: 0.1
+      attn_score_dropout: 0.1
+      attn_layer_dropout: 0.1
+      hidden_act: relu
+      pre_ln: true
+      vocab_size: None  # Will be set by the model at runtime
+  # Label Prediction Head (Token Classifier)
+  head:
+    _target_: nemo.collections.asr.parts.submodules.token_classifier.TokenClassifier
+    num_layers: 1
+    activation: relu
+    log_softmax: true
+    hidden_size: ${model.transf_decoder.config_dict.hidden_size}
+    num_classes: None  # Will be set by the model at runtime
+    dropout: 0.0
+    use_transformer_init: true
+  # Decoding Strategy
+  decoding:
+    strategy: beam
+    return_best_hypothesis: true  # Returns the most probably hypothesis after beam search
+    beam:
+      beam_size: 1
+      len_pen: 0.0
+      max_generation_delta: 50
+  # Loss Config
+  loss:
+    _target_: nemo.collections.common.losses.smoothed_cross_entropy.SmoothedCrossEntropyLoss
+    label_smoothing: ${model.label_smoothing}
+    pad_id: null
+  optim:
+    name: adamw
+    lr: 3e-4
+    # optimizer arguments
+    betas: [0.9, 0.98]
+    # less necessity for weight_decay as we already have large augmentations with SpecAug
+    # you may need weight_decay for large models, stable AMP training, small datasets, or when lower augmentations are used
+    # weight decay of 0.0 with lr of 2.0 also works fine
+    weight_decay: 1e-3
+    # scheduler setup
+    sched:
+      # name: InverseSquareRootAnnealing
+      name: CosineAnnealing
+      # scheduler config override
+      warmup_steps: 40000
+      warmup_ratio: null
+      min_lr: 1e-6
+trainer:
+  devices: 8 # number of GPUs, -1 would use all available GPUs
+  num_nodes: 2
+  max_epochs: -1
+  max_steps: 400000 # computed at runtime if not set
+  val_check_interval: 1.0 # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  accelerator: auto
+  strategy:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    gradient_as_bucket_view: true
+  accumulate_grad_batches: 1
+  gradient_clip_val: 0.0
+  precision: bf16-mixed # Should be set to bf16-mixed/16-mixed for O1 and O2 to enable the AMP.
+  log_every_n_steps: 100  # Interval of logging.
+  enable_progress_bar: True
+  num_sanity_val_steps: 2 # number of steps to perform validation steps for sanity check the validation process before starting the training, setting to 0 disables it
+  check_val_every_n_epoch: 1 # number of evaluations on validation every n epochs
+  sync_batchnorm: true
+  enable_checkpointing: False  # Provided by exp_manager
+  logger: false  # Provided by exp_manager
+  use_distributed_sampler: false  # Lhotse has its own distributed sampler
+exp_manager:
+  # exp_dir: /data/mayur_sarvam_ai/nemo_checkpoint
+  exp_dir: null
+  explicit_log_dir: /data/ASR/aviral/LOGS/CANARY/canary-flash-cloud-lepton-v1
+  # default: exp_dir: ~/nemo_checkpoint
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    # in case of multiple validation sets, first one is used
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 5
+    always_save_nemo: True # saves the checkpoints as nemo files instead of PTL checkpoints
+  # resume_from_checkpoint: /data/mayur_sarvam_ai/nemo_checkpoint/canary-flash-transcribe-v2/checkpoints/canary-flash-transcribe-v2.nemo # The path to a checkpoint file to continue the training, restores the whole state including the epoch, step, LR schedulers, apex, etc.
+  resume_from_checkpoint: null # The path to a checkpoint file to continue the training, restores the whole state including the epoch, step, LR schedulers, apex, etc.
+  # you need to set these two to True to continue the training
+  resume_if_exists: true
+  resume_ignore_no_checkpoint: true
+  # You may use this section to create a W&B logger
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    name: canary-flash-cloud-lepton-v1
+    project: Canary-flash
+

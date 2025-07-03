@@ -2,7 +2,7 @@ from huggingface_hub import HfApi, HfFolder, create_repo, upload_file
 import os
 
 # --- 1. Set up your repository information ---
-os.environ["HF_TOKEN"] = ""
+os.environ["HF_TOKEN"] = "<>"
 
 # The name you want for your new repository on the Hub
 repo_name = "sarvam/edge_canary_transcrive_v7"

@@ -46,9 +46,9 @@ if [ "$lang" != "spl" ]; then
     echo "Processing ASR text tokenizer for $lang ($version) with manifest $manifest_file and lang_base $lang_base"
         # --data_file="${manifest_file}" \
 
-    python /home/mayur_sarvam_ai/NeMo/scripts/tokenizers/process_asr_text_tokenizer.py \
+    python /data/ASR/mayur/NeMo-asr/scripts/tokenizers/process_asr_text_tokenizer.py \
         --manifest="${manifest_file}" \
-        --data_root="/data/mayur_sarvam_ai/data/${version}/tokenizer/$lang_base" \
+        --data_root="/data/ASR/aviral/canary/${version}/tokenizer/$lang_base" \
         --vocab_size=${num_tokens} \
         --tokenizer="spe" \
         --spe_type="bpe" \
@@ -58,6 +58,6 @@ if [ "$lang" != "spl" ]; then
 else
     echo "Processing special tokenizer for spl tokens"
 
-    python /home/mayur_sarvam_ai/NeMo/scripts/speech_recognition/canary/build_canary_2_special_tokenizer.py \
-        /data/mayur_sarvam_ai/data/${version}/tokenizer/spl_tokens
+    python /data/ASR/mayur/NeMo-asr/scripts/speech_recognition/canary/build_canary_2_special_tokenizer.py \
+        /data/ASR/aviral/canary/${version}/tokenizer/spl_tokens
 fi
