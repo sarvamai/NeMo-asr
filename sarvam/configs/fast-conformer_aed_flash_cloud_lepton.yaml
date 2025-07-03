@@ -147,7 +147,7 @@ model:
       - type: lhotse_shar
         weight: 0.2
         shar_path:
-          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-lf/cuts.{000000..000062}.jsonl.gz"
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-or-lf/cuts.{000000..000062}.jsonl.gz"
           recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-od-lf/recording.{000000..000062}.tar"
         shuffle: true
         shard_seed: "trng"
@@ -155,7 +155,7 @@ model:
         force_finite: false
         max_open_streams: null
         tags:
-          lang: od
+          lang: or
       - type: lhotse_shar
         weight: 0.2
         shar_path:
@@ -279,7 +279,7 @@ model:
       - type: lhotse_shar
         weight: 0.7
         shar_path:
-          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-sf/cuts.{000000..000179}.jsonl.gz"
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-or-sf/cuts.{000000..000179}.jsonl.gz"
           recordings: "/data/ASR/lhotse_train/sf_manifest/train_data_shar-od-sf/recording.{000000..000179}.tar"
         shuffle: true
         shard_seed: "trng"
@@ -287,7 +287,7 @@ model:
         force_finite: false
         max_open_streams: null
         tags:
-          lang: od
+          lang: or
       - type: lhotse_shar
         weight: 0.7
         shar_path:
@@ -411,7 +411,7 @@ model:
       - type: lhotse_shar
         weight: 0.1
         shar_path:
-          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-od-vpp/cuts.{000000..000020}.jsonl.gz"
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/train_data_shar-or-vpp/cuts.{000000..000020}.jsonl.gz"
           recordings: "/data/ASR/lhotse_train/manifest/train_data_shar-od-vpp/recording.{000000..000020}.tar"
         shuffle: true
         shard_seed: "trng"
@@ -419,7 +419,7 @@ model:
         force_finite: false
         max_open_streams: null
         tags:
-          lang: od
+          lang: or
       - type: lhotse_shar
         weight: 0.1
         shar_path:
@@ -444,30 +444,50 @@ model:
         max_open_streams: null
         tags:
           lang: pa
+    # use_lhotse: true
+    # skip_missing_manifest_entries: true
+    # sample_rate: ${model.sample_rate}
+    # shuffle: true
+    # num_workers: 8
+    # is_tarred: true
+    # # To understand the settings below, please refer to Lhotse Dataloading documentation:
+    # # https://github.com/NVIDIA/NeMo/blob/main/docs/source/asr/datasets.rst#lhotse-dataloading
+    # # You can also check the following configuration dataclass:
+    # # https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/data/lhotse/dataloader.py#L36
+    # batch_size: null
+    # batch_duration: 360
+    # quadratic_duration: 15
+    # use_bucketing: True
+    # num_buckets: 4
+    # shard_manifests: true
+    # defer_setup: true
+    # bucket_buffer_size: 10000
+    # shuffle_buffer_size: 5000
+    # text_field: "text"
+    # lang_field: "target_lang"
+    # channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
+    #   #    bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
+    #   #    bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
+    # bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
+    # bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
+    # >>>>>>>>>>>>
     use_lhotse: true
     skip_missing_manifest_entries: true
     sample_rate: ${model.sample_rate}
     shuffle: true
+    is_tarred: true
     num_workers: 16
-    # is_tarred: true
-    # To understand the settings below, please refer to Lhotse Dataloading documentation:
-    # https://github.com/NVIDIA/NeMo/blob/main/docs/source/asr/datasets.rst#lhotse-dataloading
-    # You can also check the following configuration dataclass:
-    # https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/data/lhotse/dataloader.py#L36
-    batch_size: null
-    batch_duration: 360
-    quadratic_duration: 15
-    use_bucketing: True
-    num_buckets: 4
-    shard_manifests: true
+    batch_size: 16
+    bucketing_strategy: "synced_randomized"
+    concat_sampling_technique: "temperature"
+    concat_sampling_temperature: 2.0
     defer_setup: true
-    bucket_buffer_size: 20000
-    shuffle_buffer_size: 10000
-    text_field: "text"
-    lang_field: "target_lang"
-    channel_selector: 0  # Options: int (channel index), "average" (average channels), or null (use all channels)
-    bucket_duration_bins: [[10.9,87],[10.9,119],[10.9,147],[10.9,182],[10.9,416],[15.5,131],[15.5,151],[15.5,172],[15.5,201],[15.5,416],[20.1,151],[20.1,171],[20.1,191],[20.1,219],[20.1,404],[30.0,169],[30.0,192],[30.0,214],[30.0,243],[30.0,404]]
-    bucket_batch_size: [99,91,83,74,44,66,64,60,56,37,50,48,47,44,33,34,33,32,31,25]
+    is_concat: true
+    max_duration: 400
+    min_duration: 0.025
+    pin_memory: true
+    shard_manifests: true
+    shuffle_n: 2048
   validation_ds:
     input_cfg:
       - type: lhotse_shar
@@ -532,14 +552,14 @@ model:
           lang: bn
       - type: lhotse_shar
         shar_path:
-          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-od-vpp/cuts.000000.jsonl.gz"
+          cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-or-vpp/cuts.000000.jsonl.gz"
           recordings: "/data/ASR/lhotse_train/manifest/val_data_shar-od-vpp/recording.000000.tar"
         shard_seed: "trng"
         metadata_only: false
         force_finite: true    # FIXED: Forces complete shar loading
         max_open_streams: null
         tags:
-          lang: od
+          lang: or
       - type: lhotse_shar
         shar_path:
           cuts: "/data/ASR/lhotse_train/canary_manifests_transcribe/val_data_shar-hi-vpp/cuts.000000.jsonl.gz"
@@ -562,8 +582,8 @@ model:
           lang: gu
     use_lhotse: true
     sample_rate: ${model.sample_rate}
-    num_workers: 4
-    batch_size: 16  # you can keep this or adjust based on your GPU memory
+    num_workers: 1
+    batch_size: 1  # you can keep this or adjust based on your GPU memory
     use_bucketing: false  # typically not needed for validation
     shard_manifests: false  # FIXED: Disabled sharding for validation
     defer_setup: false      # FIXED: Setup immediately to avoid lazy loading issues
@@ -736,7 +756,7 @@ model:
       min_lr: 1e-6
 trainer:
   devices: 8 # number of GPUs, -1 would use all available GPUs
-  num_nodes: 2
+  num_nodes: 8
   max_epochs: -1
   max_steps: 400000 # computed at runtime if not set
   val_check_interval: 1.0 # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
@@ -779,4 +799,3 @@ exp_manager:
   wandb_logger_kwargs:
     name: canary-flash-cloud-lepton-v1
     project: Canary-flash
-
