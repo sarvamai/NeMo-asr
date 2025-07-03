@@ -20,7 +20,7 @@ name: "canary-flash-cloud-lepton-v1"
 #  may help (or even be required to) stabilize the training.
 init_from_nemo_model:
   model0:
-    path: "<>"
+    path: "/data/ASR/mayur/models/canary_in22_multilingual_tokenizer_v2-averaged.nemo"
     # exclude: ["transf_decoder._embedding.token_embedding", "log_softmax.mlp.layer0"]
 # init_exclude: ["transf_decoder._embedding.token_embedding", "log_softmax.mlp.layer0"]
 init_strict: false
