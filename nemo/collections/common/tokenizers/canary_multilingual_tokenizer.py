@@ -225,6 +225,6 @@ def _map_canary1_to_canary2_lang(lang: str, available_langs: list[str]) -> str:
     ) is not None and mapped in available_langs:
         return mapped
 
-    if lang in ['as', 'bn', 'brx', 'doi', 'en', 'gu', 'hi', 'kn', 'ks', 'kok', 'mai', 'ml', 'mni', 'mr', 'ne', 'od', 'pa', 'sa', 'sat', 'sd', 'ta', 'te', 'ur']:
+    if lang in ['as', 'bn', 'brx', 'doi', 'en', 'gu', 'hi', 'kn', 'ks', 'kok', 'mai', 'ml', 'mni', 'mr', 'ne', 'od', 'pa', 'sa', 'sat', 'sd', 'ta', 'te', 'ur', 'or']:
         return 'multilingual'
     raise RuntimeError(f"Unsupported language: '{lang}' for CanaryTokenizer with languages: {available_langs}")
