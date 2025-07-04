@@ -241,6 +241,21 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         # Setup encoder adapters (from ASRAdapterModelMixin)
         self.setup_adapters()
 
+        if cfg.get('parent_model', None) is not None:
+            is_cuda = torch.cuda.is_available()
+            map_location = 'cuda' if is_cuda else 'cpu'
+            self.parent_model = EncDecMultiTaskModel.restore_from(cfg.parent_model, map_location=map_location)
+
+            # Freeze the parent model's parameters
+            for param in self.parent_model.parameters():
+                param.requires_grad = False
+            self.parent_model.eval()
+            self.distill_loss = torch.nn.KLDivLoss(reduction='batchmean')
+            self.temperature = 2.0
+            print(">>>> Loaded parent model")
+        else:
+            self.parent_model = None
+
     def change_decoding_strategy(self, decoding_cfg: DictConfig):
         """
         Changes decoding strategy used during Multi Task decoding process.
@@ -746,6 +761,32 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             loss_mask = None
         transf_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
 
+        total_loss = transf_loss
+        
+        # --- Distillation Loss Calculation ---
+        if self.parent_model is not None:
+            with torch.no_grad():
+                # Parent model forward pass to get soft labels
+                parent_log_probs, _, _, _ = self.parent_model.forward(
+                    input_signal=batch.audio,
+                    input_signal_length=batch.audio_lens,
+                    transcript=input_ids,
+                    transcript_length=input_ids_lens,
+                )
+
+            # Apply temperature scaling to soften the probability distributions
+            student_log_probs_distill = torch.nn.functional.log_softmax(transf_log_probs / self.temperature, dim=-1)
+            parent_log_probs_distill = torch.nn.functional.softmax(parent_log_probs / self.temperature, dim=-1)
+
+            # Calculate distillation loss
+            distillation_loss = self.distill_loss(student_log_probs_distill, parent_log_probs_distill)
+
+            # Apply the distillation weight from the config
+            distillation_weight = self.cfg.get("distillation_weight", 0.5)
+            
+            # Combine the losses
+            total_loss = (1.0 - distillation_weight) * transf_loss + distillation_weight * distillation_loss
+
         # Train step evaluation. From other asr models.
         if hasattr(self, '_trainer') and self._trainer is not None:
             log_every_n_steps = self._trainer.log_every_n_steps
@@ -765,7 +806,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
 
         metric_dict.update(
             {
-                'train_loss': transf_loss,
+                'train_loss': total_loss,
                 'learning_rate': torch.as_tensor(self._optimizer.param_groups[0]['lr']),
                 'batch_size': torch.as_tensor(batch.audio.shape[0]),
                 'num_frames': num_frames,
@@ -774,7 +815,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                 'output_to_padding_ratio': num_tokens / tot_tokens,
             }
         )
-        return {"loss": transf_loss, "log": metric_dict}
+        return {"loss": total_loss, "log": metric_dict}
 
     def validation_pass(self, batch: PromptedAudioToTextMiniBatch, batch_idx, dataloader_idx=0, eval_mode="val"):
         input_ids, labels = batch.get_decoder_inputs_outputs()
