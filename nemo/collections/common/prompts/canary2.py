@@ -177,11 +177,10 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
         
         
     src_lang = cut.custom.get("source_lang")
-    trgt_lang = cut.custom.get("target_lang")    
-        
-    available_contexts = [""]
+    trgt_lang = cut.custom.get("target_lang")
     
-    if src_lang == trgt_lang and source_lang !="en": #indicating that the task is transcribe (if the src language is english then take normal contexts keys only)
+    available_contexts = [""]
+    if src_lang == trgt_lang and src_lang !="en": #indicating that the task is transcribe (if the src language is english then take normal contexts keys only)
         context_keys = ['indic_prev_chunk_context', 'indic_prev_context', 'indic_question_context'] # taking indic context
     else: #indicating that the task is translate
         context_keys = ['prev_chunk_context', 'prev_context', 'question_context'] # taking english context
@@ -189,6 +188,7 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
     if cut.supervisions and hasattr(cut.supervisions[0], 'custom') and cut.supervisions[0].custom:
             for key in context_keys:
                 if key in cut.supervisions[0].custom and cut.supervisions[0].custom[key]:
+                    
                     available_contexts.append(cut.supervisions[0].custom[key])
                      
     decoder_context = random.choice(available_contexts)
@@ -206,7 +206,10 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
     slots[prompt.PROMPT_LANGUAGE_SLOT] = CANARY_SPECIAL_TOKENIZER
     for k, v in optional_slots.items():
         slots[k] = cut.custom[k] if k in cut.custom else v
-    print(slots)
+    
+    if slots["decodercontext"] != "":
+        print(slots)
+    
     turns = [dict(role="user", slots=slots)]
     # If data has no transcript, create empty response with <eos> only.
     text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
