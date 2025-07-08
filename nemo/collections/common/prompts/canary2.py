@@ -32,6 +32,9 @@ from nemo.collections.common.tokenizers.canary_tokenizer import (
 from nemo.collections.common.tokenizers.canary_multilingual_tokenizer import (
     CanaryMultilingualTokenizer,
 )
+
+import random
+
 # Use global variables to import slot values in other modules.
 ITN_TRUE = BOOL_TRUE | {
     "itn",
@@ -145,6 +148,9 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
         raise TypeError(
             f"Expected input audio to have a single channel (required MonoCut/MixedCut, but we received: {cut=})"
         )
+    if cut.custom is None:
+        cut.custom = {}
+
 
     expected_slots = {"source_lang", "target_lang"}
     missing_keys = expected_slots - set(cut.custom)
@@ -168,7 +174,26 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
             f"We found cut with ID {cut.id} that is missing the following keys: {missing_keys}"
             f"Please ensure that every utterance in the input manifests contains these keys."
         )
-
+        
+        
+    src_lang = cut.custom.get("source_lang")
+    trgt_lang = cut.custom.get("target_lang")    
+        
+    available_contexts = [""]
+    
+    if src_lang == trgt_lang and source_lang !="en": #indicating that the task is transcribe (if the src language is english then take normal contexts keys only)
+        context_keys = ['indic_prev_chunk_context', 'indic_prev_context', 'indic_question_context'] # taking indic context
+    else: #indicating that the task is translate
+        context_keys = ['prev_chunk_context', 'prev_context', 'question_context'] # taking english context
+    
+    if cut.supervisions and hasattr(cut.supervisions[0], 'custom') and cut.supervisions[0].custom:
+            for key in context_keys:
+                if key in cut.supervisions[0].custom and cut.supervisions[0].custom[key]:
+                    available_contexts.append(cut.supervisions[0].custom[key])
+                     
+    decoder_context = random.choice(available_contexts)
+    cut.custom['decodercontext'] = decoder_context
+    
     optional_slots = {
         "decodercontext": "",
         "emotion": "<|emo:undefined|>",
@@ -181,7 +206,7 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
     slots[prompt.PROMPT_LANGUAGE_SLOT] = CANARY_SPECIAL_TOKENIZER
     for k, v in optional_slots.items():
         slots[k] = cut.custom[k] if k in cut.custom else v
-
+    print(slots)
     turns = [dict(role="user", slots=slots)]
     # If data has no transcript, create empty response with <eos> only.
     text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
@@ -198,8 +223,8 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
     if isinstance(prompt.tokenizer, CanaryTokenizer) or isinstance(prompt.tokenizer, CanaryMultilingualTokenizer):
         eos = prompt.tokenizer.eos
     else:  # SPE
-        eos = prompt.tokenizer.token_to_id(CANARY_EOS)
-    assert eos > -1, "Invalid tokenizer: tokenizer.token_to_id('{CANARY_EOS}') returned {eos}"
+        eos = prompt.tokenizer.token_to_id(CANARY_EOS)  # type: ignore
+    assert eos > -1, f"Invalid tokenizer: tokenizer.token_to_id('{CANARY_EOS}') returned {eos}"
     assert (
         ans["answer_ids"][-1].item() == eos
     ), f"Expected the last token in answer_ids to be EOS, but we got {ans['answer_ids']}"
