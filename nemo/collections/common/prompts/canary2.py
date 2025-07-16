@@ -18,6 +18,7 @@ import torch
 from lhotse import MonoCut
 from lhotse.cut import Cut, MixedCut
 from lhotse.utils import ifnone
+import numpy as np
 
 from nemo.collections.common.data.prompt_fn import registered_prompt_format_fn
 from nemo.collections.common.prompts.canary import BOOL_FALSE, BOOL_TRUE, PNC_FALSE, PNC_TRUE
@@ -34,6 +35,7 @@ from nemo.collections.common.tokenizers.canary_multilingual_tokenizer import (
 )
 
 import random
+from collections import deque
 
 # Use global variables to import slot values in other modules.
 ITN_TRUE = BOOL_TRUE | {
@@ -45,6 +47,10 @@ TIMESTAMP_TRUE = BOOL_TRUE | {"timestamp", "<|timestamp|>"}
 TIMESTAMP_FALSE = BOOL_FALSE | {"notimestamp", "<|notimestamp|>"}
 DIARIZE_TRUE = BOOL_TRUE | {"diarize", "<|diarize|>"}
 DIARIZE_FALSE = BOOL_FALSE | {"nodiarize", "<|nodiarize|>"}
+
+
+# Global deque to store random contexts, with a maximum size.
+RANDOM_CONTEXTS = deque(maxlen=1000)
 
 
 class Canary2PromptFormatter(PromptFormatter):
@@ -158,12 +164,12 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
         # fix for missing source_lang
         language = cut.supervisions[0].language
         language = language.lower()
-        source_lang = cut.supervisions[0].custom['source_lang']
-        target_lang = cut.supervisions[0].custom['target_lang']
+        source_lang = language
+        target_lang = language
         # add to cut.custom
         # TODO: This needs to be fixed as this won't work for the translation task
-        cut.custom["source_lang"] = source_lang
-        cut.custom["target_lang"] = target_lang
+        cut.custom["source_lang"] = cut.supervisions[0].custom['source_lang']
+        cut.custom["target_lang"] = cut.supervisions[0].custom['target_lang']
         cut.custom["prompt_language"] = target_lang
 
     # first, validate the utterance
@@ -175,6 +181,31 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
             f"Please ensure that every utterance in the input manifests contains these keys."
         )
         
+        
+    src_lang = cut.custom.get("source_lang")
+    trgt_lang = cut.custom.get("target_lang")
+    
+    available_contexts = [""]
+    if src_lang == trgt_lang and src_lang !="en": #indicating that the task is transcribe (if the src language is english then take normal contexts keys only)
+        context_keys = ['indic_prev_chunk_context', 'indic_prev_context', 'indic_question_context'] # taking indic context
+    else: #indicating that the task is translate
+        context_keys = ['prev_chunk_context', 'prev_context', 'question_context'] # taking english context
+    
+    if cut.supervisions and hasattr(cut.supervisions[0], 'custom') and cut.supervisions[0].custom:
+        for key in context_keys:
+            if key in cut.supervisions[0].custom and cut.supervisions[0].custom[key]:
+                correct_context = cut.supervisions[0].custom[key]
+                available_contexts.append(correct_context)
+                if correct_context:
+                    RANDOM_CONTEXTS.append(correct_context)
+
+    if RANDOM_CONTEXTS:
+        wrong_context = np.random.choice(RANDOM_CONTEXTS)
+        available_contexts.append(wrong_context)
+    
+    decoder_context = random.choice(available_contexts)
+    
+    cut.custom['decodercontext'] = decoder_context
     
     optional_slots = {
         "decodercontext": "",
@@ -202,7 +233,7 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
                 "text": text,
                 prompt.PROMPT_LANGUAGE_SLOT: ifnone(cut.supervisions[0].language, cut.custom.get("target_lang")),
             },
-        ),  
+        ),
     )
     ans = prompt.encode_dialog(turns)
     if isinstance(prompt.tokenizer, CanaryTokenizer) or isinstance(prompt.tokenizer, CanaryMultilingualTokenizer):
