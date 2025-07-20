@@ -22,7 +22,7 @@ from nemo.collections.common.tokenizers.sentencepiece_tokenizer import SentenceP
 from nemo.collections.common.tokenizers.tiktoken_tokenizer import TiktokenTokenizer
 from nemo.collections.common.tokenizers.tokenizer_spec import TokenizerSpec
 from nemo.collections.common.tokenizers.word_tokenizer import WordTokenizer
-
+from nemo.collections.common.tokenizers.canary_multilingual_tokenizer import CanaryMultilingualTokenizer
 
 __all__ = [
     "AggregateTokenizer",
@@ -34,4 +34,5 @@ __all__ = [
     "SentencePieceTokenizer",
     "TokenizerSpec",
     "WordTokenizer",
+    "CanaryMultilingualTokenizer"
 ]

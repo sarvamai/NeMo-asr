@@ -413,6 +413,8 @@ def collate_conversation_audio_fault_tolerant(
             conv_audios = []
             conv_cuts = []
             for cut in conversation.list_cuts():
+                if hasattr(cut, 'custom') and cut.custom is not None and 'recordings' in cut.custom:
+                    cut.recording = cut.custom['recordings']
                 conv_audios.append(torch.as_tensor(cut.load_audio()).squeeze())
                 conv_cuts.append(cut)
         except AudioLoadingError:

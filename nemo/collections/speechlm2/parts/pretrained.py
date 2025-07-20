@@ -20,6 +20,7 @@ from peft import PeftModel
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from nemo.collections.asr.models import ASRModel
+from nemo.collections.asr.models.aed_multitask_models import EncDecMultiTaskModel
 from nemo.collections.speechlm2.modules import AudioPerceptionModule
 
 from nemo.collections.speechlm2.parts.precision import fp32_precision
@@ -90,7 +91,8 @@ def setup_speech_encoder(model: torch.nn.Module, pretrained_weights: bool = True
     The result is assigned to ``model.perception`` attribute and is trainable.
     """
     if pretrained_weights:
-        asr = load_pretrained_nemo(ASRModel, model.cfg.pretrained_asr).eval()
+        # asr = load_pretrained_nemo(ASRModel, model.cfg.pretrained_asr).eval()
+        asr = EncDecMultiTaskModel.restore_from(model.cfg.pretrained_asr).eval()
         with open_dict(model.cfg):
             model.cfg.perception.preprocessor = asr.cfg.preprocessor
             model.cfg.perception.encoder = asr.cfg.encoder

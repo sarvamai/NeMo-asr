@@ -17,6 +17,7 @@ import torch
 from lightning.pytorch import Trainer
 from omegaconf import OmegaConf
 
+# from nemo.collections.common.data.fallback import FallbackDataset
 from nemo.collections.speechlm2 import SALM, DataModule, SALMDataset
 from nemo.core.config import hydra_runner
 from nemo.utils.exp_manager import exp_manager
@@ -24,8 +25,9 @@ from nemo.utils.trainer_utils import resolve_trainer_cfg
 
 torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
+os.environ["HF_TOKEN"] = ""
 
-@hydra_runner(config_path="conf", config_name="salm")
+@hydra_runner(config_path="conf", config_name="canary-gemma")
 def train(cfg):
     OmegaConf.resolve(cfg)
     torch.distributed.init_process_group(backend="nccl")
