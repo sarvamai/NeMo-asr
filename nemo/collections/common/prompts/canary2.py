@@ -195,8 +195,8 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
         for key in context_keys:
             if key in cut.supervisions[0].custom and cut.supervisions[0].custom[key]:
                 correct_context = cut.supervisions[0].custom[key]
-                available_contexts.append(correct_context)
-                if correct_context:
+                if correct_context and len(correct_context) < 1200:
+                    available_contexts.append(correct_context)
                     RANDOM_CONTEXTS.append(correct_context)
 
     if RANDOM_CONTEXTS:
