@@ -58,12 +58,17 @@ class Canary2PromptFormatter(PromptFormatter):
     OUTPUT_ROLE = "assistant"
     TEMPLATE = {
         # User prompt.
-        # This is the main role used for training and ASR/AST inference.
         "user": {
-            "template": f"{CANARY2_BOCTX}|decodercontext|{CANARY_BOS}|emotion||source_lang||target_lang||pnc||itn||timestamp||diarize|",
+            "template": f"{CANARY2_BOCTX}|decodercontext|{CANARY_BOS}",
             "slots": {
                 # Empty string or previous transcript / other context to bias predictions.
                 "decodercontext": Modality.Text,
+            },
+        },
+        # System's reponse.
+        OUTPUT_ROLE: {
+            "template": f"|emotion||source_lang||target_lang||pnc||itn||timestamp||diarize||text|{CANARY_EOS}",
+            "slots": {
                 # Emotion of the speaker - may be predicted by the model with a partial prompt.
                 "emotion": Modality.TextLiteral(
                     "<|emo:undefined|>", "<|emo:neutral|>", "<|emo:angry|>", "<|emo:happy|>", "<|emo:sad|>"
@@ -80,65 +85,36 @@ class Canary2PromptFormatter(PromptFormatter):
                 "timestamp": Modality.TextLiteral(*(TIMESTAMP_TRUE | TIMESTAMP_FALSE)),
                 # # Should we diarize speech?
                 "diarize": Modality.TextLiteral(*(DIARIZE_TRUE | DIARIZE_FALSE)),
-            },
-        },
-        # User prompt.
-        # This role is used for emotion / LID inference only - use it for two just two decoder inference steps
-        # to retrieve the recognized emotion and language tokens.
-        "user_partial": {
-            "template": f"{CANARY2_BOCTX}|decodercontext|{CANARY_BOS}",
-            "slots": {
-                # Empty string or previous transcript / other context to bias predictions.
-                "decodercontext": Modality.Text,
-            },
-        },
-        # System's reponse.
-        OUTPUT_ROLE: {
-            "template": f"|text|{CANARY_EOS}",
-            "slots": {
                 "text": Modality.Text,
             },
         },
     }
 
     def encode_turn(self, prompt_template: str, expected_slots: dict, slot_values: dict) -> list[int]:
-        # This method handles a level of indirection for Canary.
-        # It maps values provided in trcfg to the actual special tokens
-        # expected to be present in canary prompt.
-        # It used to be done in prompt_format_fn inside Dataset class corresponding to Canary,
-        # but we are not using it here anymore.
-        # This maps things such as '|task|: "asr"' to '|TASK|: "<|transcribe|>"'.
-        slot_values = map_manifest_values_to_special_tokens(slot_values)
+        if "text" in expected_slots and "source_lang" in expected_slots:  # is assistant turn
+            tokens = []
+            # Split template by |text|
+            before_text, after_text = prompt_template.split('|text|')
+
+            # Process and tokenize before_text part
+            prompt = before_text
+            for slot in expected_slots:
+                if slot != 'text':
+                    prompt = prompt.replace(_mangled(slot), slot_values[slot])
+            tokens.extend(self._apply_tokenizer(prompt, lang=CANARY_SPECIAL_TOKENIZER))
+
+            # Tokenize text part
+            text_lang = slot_values.get('text_lang') or slot_values.get('target_lang')
+            tokens.extend(self._apply_tokenizer(slot_values['text'], lang=text_lang))
+
+            # Tokenize after_text part
+            tokens.extend(self._apply_tokenizer(after_text, lang=CANARY_SPECIAL_TOKENIZER))
+
+            return tokens
+
         return super().encode_turn(
             prompt_template=prompt_template, expected_slots=expected_slots, slot_values=slot_values
         )
-
-
-def map_manifest_values_to_special_tokens(slot_values: dict[str, str]) -> dict[str, str]:
-    slot_values = slot_values.copy()
-
-    any_special_token_present = False
-
-    for k in ("source_lang", "target_lang"):
-        if k in slot_values and not ((v := slot_values[k]).startswith("<|") and v.endswith("|>")):
-            val = slot_values[k]
-            slot_values[k] = "<|" + val + "|>"
-            any_special_token_present = True
-
-    # Handle boolean slots
-    for k in ("pnc", "itn", "timestamp", "diarize"):
-        true_token = f"<|{k}|>"
-        false_token = f"<|no{k}|>"
-        if k in slot_values and slot_values[k] not in (true_token, false_token):
-            slot_values[k] = true_token if slot_values[k] in ("yes", "1", "True", "true", k) else false_token
-            any_special_token_present = True
-
-    # Auto-inject which tokenizer to look up in CanaryTokenizer if not provided,
-    # and slots for this turn correspond to user prompt.
-    if any_special_token_present and PromptFormatter.PROMPT_LANGUAGE_SLOT not in slot_values:
-        slot_values[PromptFormatter.PROMPT_LANGUAGE_SLOT] = CANARY_SPECIAL_TOKENIZER
-
-    return slot_values
 
 
 @registered_prompt_format_fn(Cut, Canary2PromptFormatter)
@@ -193,57 +169,32 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
             text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
     else:
         text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
+    
     cut.custom['target_lang'] = trgt_lang
     # an-thony end
     
-    # available_contexts = [""]
-    # if src_lang == trgt_lang and src_lang !="en": #indicating that the task is transcribe (if the src language is english then take normal contexts keys only)
-    #     context_keys = ['indic_prev_chunk_context', 'indic_prev_context', 'indic_question_context'] # taking indic context
-    # else: #indicating that the task is translate
-    #     context_keys = ['prev_chunk_context', 'prev_context', 'question_context'] # taking english context
-    
-    # if cut.supervisions and hasattr(cut.supervisions[0], 'custom') and cut.supervisions[0].custom:
-    #     for key in context_keys:
-    #         if key in cut.supervisions[0].custom and cut.supervisions[0].custom[key]:
-    #             correct_context = cut.supervisions[0].custom[key]
-    #             if correct_context and len(correct_context) < 1200:
-    #                 available_contexts.append(correct_context)
-    #                 RANDOM_CONTEXTS.append(correct_context)
+    user_slots = {"decodercontext": cut.custom.get("decodercontext", "")}
 
-    # if RANDOM_CONTEXTS:
-    #     wrong_context = np.random.choice(RANDOM_CONTEXTS)
-    #     available_contexts.append(wrong_context)
-    
-    # decoder_context = random.choice(available_contexts)
-    # cut.custom['decodercontext'] = decoder_context
-    
     optional_slots = {
-        "decodercontext": "",
         "emotion": "<|emo:undefined|>",
         "itn": "<|noitn|>",
         "timestamp": "<|notimestamp|>",
         "diarize": "<|nodiarize|>",
-        "pnc": "<|pnc|>"  # consistent with canary1
+        "pnc": "<|pnc|>",  # consistent with canary1
     }
-    slots = {slot: cut.custom[slot] for slot in expected_slots}
-    slots[prompt.PROMPT_LANGUAGE_SLOT] = CANARY_SPECIAL_TOKENIZER
+
+    assistant_slots = {
+        "source_lang": f"<|{src_lang}|>",
+        "target_lang": f"<|{trgt_lang}|>",
+        "text": text,
+        "text_lang": ifnone(cut.supervisions[0].language, trgt_lang),
+    }
+
     for k, v in optional_slots.items():
-        slots[k] = cut.custom[k] if k in cut.custom else v
-    slots['target_lang'] = trgt_lang
-    # if slots["decodercontext"] != "":
-    #     print(slots)
-    
-    turns = [dict(role="user", slots=slots)]
+        assistant_slots[k] = cut.custom.get(k, v)
+
+    turns = [dict(role="user", slots=user_slots), dict(role="assistant", slots=assistant_slots)]
     # If data has no transcript, create empty response with <eos> only.
-    turns.append(
-        dict(
-            role="assistant",
-            slots={
-                "text": text,
-                prompt.PROMPT_LANGUAGE_SLOT: ifnone(cut.supervisions[0].language, cut.custom.get("target_lang")),
-            },
-        ),
-    )
     ans = prompt.encode_dialog(turns)
     if isinstance(prompt.tokenizer, CanaryTokenizer) or isinstance(prompt.tokenizer, CanaryMultilingualTokenizer):
         eos = prompt.tokenizer.eos

@@ -922,7 +922,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             default_turns = self.prompt.get_default_dialog_slots()
             if not trcfg.prompt:
                 # No turns were provided, use defaults.
-                turns = default_turns
+                turns = [t for t in default_turns if t['role'] == 'user']
             else:
                 # Turns were provided, iterate over them and fill missing slot values using defaults..
                 turns = trcfg.prompt.copy()  # shallow copy #1: don't override the config
@@ -1077,6 +1077,8 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             else:
                 raise ValueError(f"Expected str or dict, got {type(item)}")
             default_turn = [t for t in trcfg.prompt if t["role"] == "user"]
+            if not default_turn:
+                default_turn = [t for t in self.prompt.get_default_dialog_slots() if t["role"] == "user"]
             default_turn = default_turn[0]["slots"] if default_turn else {}
 
             # check for prompt format
