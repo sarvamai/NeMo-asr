@@ -172,10 +172,12 @@ class PromptFormatter(ABC):
     # Internal reserved field.
     _REGISTERED_FORMATTERS = {}
 
-    def __init__(self, tokenizer: TokenizerSpec, defaults: list[dict] | None = None) -> None:
+    def __init__(self, tokenizer: TokenizerSpec, defaults: list[dict] | None = None, **kwargs) -> None:
         self.tokenizer = tokenizer
         self._defaults = defaults if defaults is not None else []
         self._validate_defaults()
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def __init_subclass__(cls, **kwargs) -> None:
         ERR = "PromptFormatter subclass definition error:"

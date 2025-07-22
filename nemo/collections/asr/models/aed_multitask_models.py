@@ -135,6 +135,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         self.prompt = prompt_cls(
             tokenizer=self.tokenizer,
             defaults=OmegaConf.to_container(pd) if (pd := cfg.get("prompt_defaults")) is not None else None,
+            translation_task_prob=cfg.get("translation_task_prob", 0.0),
         )
 
         super().__init__(cfg=cfg, trainer=trainer)
@@ -457,6 +458,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         self.prompt = prompt_cls(
             tokenizer=self.tokenizer,
             defaults=OmegaConf.to_container(pd) if (pd := self.cfg.get('prompt_defaults')) is not None else None,
+            translation_task_prob=self.cfg.get("translation_task_prob", 0.0),
         )
 
         # Update metric logger
