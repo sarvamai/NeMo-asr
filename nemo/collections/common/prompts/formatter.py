@@ -199,7 +199,7 @@ class PromptFormatter(ABC):
             template = cls.get_template(role)
             for slot in cls.get_slots(role):
                 assert (
-                    _mangled(slot) in template
+                    f'|{slot}|' in template
                 ), f"{ERR} Slot '{slot}' not found in template '{template}' for role '{role}'"
         super().__init_subclass__(**kwargs)
 
@@ -261,7 +261,7 @@ class PromptFormatter(ABC):
             # for passing slots around in user functions.
             value = slot_values.get(slot)
             assert value is not None, f"Missing required {slot=} in {slot_values=} for {prompt_template=}"
-            prompt = prompt.replace(_mangled(slot), value)
+            prompt = prompt.replace(f'|{slot}|', value)
         return self._apply_tokenizer(prompt, lang=slot_values.get(self.PROMPT_LANGUAGE_SLOT))
 
     def encode_dialog(self, turns: list[dict]) -> dict[str, torch.Tensor]:
@@ -408,15 +408,3 @@ class PromptFormatter(ABC):
                         f"{err} Invalid {slot=} in {turn=}. "
                         f"The following slots are supported for {role=}: {expected_slots}"
                     )
-
-
-def _mangled(slot: str) -> str:
-    if not (slot[0] == "|" and slot[-1] == "|"):
-        return f"|{slot}|"
-    return slot
-
-
-def _unmangled(slot: str) -> str:
-    if slot[0] == "|" and slot[-1] == "|":
-        return slot[1:-1]
-    return slot

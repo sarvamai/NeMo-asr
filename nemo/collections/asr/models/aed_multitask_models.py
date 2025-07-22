@@ -930,7 +930,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                     role = turn["role"]
                     # Check if we have defaults for this role.
                     # There shouldn't be more than a single turn for a given role, but if there are,
-                    # we'll emit a warning.
+                    # we'll emit a a warning.
                     if default_turns_for_role := [t for t in default_turns if t["role"] == role]:
                         if len(default_turns_for_role) > 1:
                             warnings.warn(
@@ -1092,17 +1092,6 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                         "Context feature is not supported in Canary prompt format. Please use latest canary-1b-flash or canary-180m-flash"
                     )
 
-            for k, dv in (
-                ("source_lang", "en"),
-                ("target_lang", "en"),
-                ("taskname", "asr"),
-                ("pnc", "yes"),
-                ("context", ""),
-                ("timestamp", 'notimestamp'),
-            ):
-                if k not in entry:
-                    # last-chance fallback injecting legacy Canary defaults if none were provided.
-                    entry[k] = default_turn.get(k, dv)
             out_json_items.append(entry)
         return out_json_items
 

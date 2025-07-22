@@ -59,32 +59,22 @@ class Canary2PromptFormatter(PromptFormatter):
     TEMPLATE = {
         # User prompt.
         "user": {
-            "template": f"{CANARY2_BOCTX}|decodercontext|{CANARY_BOS}",
+            "template": f"{CANARY2_BOCTX}|decodercontext|{CANARY_BOS}|emotion||pnc||itn||diarize||target_lang|",
             "slots": {
                 # Empty string or previous transcript / other context to bias predictions.
                 "decodercontext": Modality.Text,
+                "emotion": Modality.Text,
+                "pnc": Modality.Text,
+                "itn": Modality.Text,
+                "diarize": Modality.Text,
+                "target_lang": Modality.Text,
             },
         },
         # System's reponse.
         OUTPUT_ROLE: {
-            "template": f"|emotion||source_lang||target_lang||pnc||itn||timestamp||diarize||text|{CANARY_EOS}",
+            "template": f"|source_lang||text|{CANARY_EOS}",
             "slots": {
-                # Emotion of the speaker - may be predicted by the model with a partial prompt.
-                "emotion": Modality.TextLiteral(
-                    "<|emo:undefined|>", "<|emo:neutral|>", "<|emo:angry|>", "<|emo:happy|>", "<|emo:sad|>"
-                ),
-                # Audio input language - may be predicted by the model with a partial prompt.
                 "source_lang": Modality.Text,
-                # Transcription language - specified by the user.
-                "target_lang": Modality.Text,
-                # Should we predict punctuation and capitalization?
-                "pnc": Modality.TextLiteral(*(PNC_TRUE | PNC_FALSE)),
-                # Should we predict with inverse text normalization (numerals as digits, abbreviations, etc.)
-                "itn": Modality.TextLiteral(*(ITN_TRUE | ITN_FALSE)),
-                # Should we predict timestamps?
-                "timestamp": Modality.TextLiteral(*(TIMESTAMP_TRUE | TIMESTAMP_FALSE)),
-                # # Should we diarize speech?
-                "diarize": Modality.TextLiteral(*(DIARIZE_TRUE | DIARIZE_FALSE)),
                 "text": Modality.Text,
             },
         },
@@ -100,17 +90,21 @@ class Canary2PromptFormatter(PromptFormatter):
             prompt = before_text
             for slot in expected_slots:
                 if slot != 'text':
-                    prompt = prompt.replace(_mangled(slot), slot_values[slot])
+                    prompt = prompt.replace(f'|{slot}|', slot_values[slot])
             tokens.extend(self._apply_tokenizer(prompt, lang=CANARY_SPECIAL_TOKENIZER))
 
             # Tokenize text part
-            text_lang = slot_values.get('text_lang') or slot_values.get('target_lang')
-            tokens.extend(self._apply_tokenizer(slot_values['text'], lang=text_lang))
+            tokens.extend(self._apply_tokenizer(slot_values['text'], lang="multilingual"))
 
             # Tokenize after_text part
             tokens.extend(self._apply_tokenizer(after_text, lang=CANARY_SPECIAL_TOKENIZER))
 
             return tokens
+
+        # For the user turn, we need to inject special tokenizer lang
+        # so that control tokens are tokenized correctly.
+        if "target_lang" in expected_slots and "source_lang" not in expected_slots:  # is user turn
+            slot_values[self.PROMPT_LANGUAGE_SLOT] = CANARY_SPECIAL_TOKENIZER
 
         return super().encode_turn(
             prompt_template=prompt_template, expected_slots=expected_slots, slot_values=slot_values
@@ -133,76 +127,62 @@ def canary2(cut: Cut, prompt: Canary2PromptFormatter) -> dict[str, torch.Tensor]
     if cut.custom is None:
         cut.custom = {}
 
-
-    expected_slots = {"source_lang", "target_lang"}
-    missing_keys = expected_slots - set(cut.custom)
-    if missing_keys:
-        # fix for missing source_lang
-        language = cut.supervisions[0].language
-        language = language.lower()
-        # add to cut.custom
-        # TODO: This needs to be fixed as this won't work for the translation task
-        cut.custom["source_lang"] = cut.supervisions[0].custom['source_lang']
-        cut.custom["target_lang"] = cut.supervisions[0].custom['target_lang']
-
-    # first, validate the utterance
-    expected_slots = {"source_lang", "target_lang"}
-    missing_keys = expected_slots - set(cut.custom)
-    if missing_keys:
-        raise RuntimeError(
-            f"We found cut with ID {cut.id} that is missing the following keys: {missing_keys}"
-            f"Please ensure that every utterance in the input manifests contains these keys."
-        )
-        
-        
     src_lang = cut.custom.get("source_lang")
-    trgt_lang = cut.custom.get("target_lang")
-    
-    # an-thony start
+    if src_lang is None:
+        # Fallback to lhotse supervision language if not in manifest
+        src_lang = cut.supervisions[0].language
+        if src_lang is None:
+            raise RuntimeError(f"Cut with id {cut.id} does not have language information.")
+
     is_translation = False
-    if prompt.translation_task_prob > 0.0 and "translation" in cut.supervisions[0].custom:
-        if random.random() < prompt.translation_task_prob:
-            is_translation = True
-            trgt_lang = "en"
-            text = cut.supervisions[0].custom["translation"]
-        else:
-            text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
+    # Use prompt.translation_task_prob if it exists
+    if hasattr(prompt, "translation_task_prob") and prompt.translation_task_prob > 0.0:
+        if "translation" in cut.supervisions[0].custom and cut.supervisions[0].custom["translation"] is not None:
+            if random.random() < prompt.translation_task_prob:
+                is_translation = True
+
+    if is_translation:
+        trgt_lang = "en"
+        text = cut.supervisions[0].custom["translation"]
     else:
+        trgt_lang = src_lang
         text = ' '.join(s.text for s in cut.supervisions if s.text is not None)
-    
-    cut.custom['target_lang'] = trgt_lang
-    # an-thony end
-    
+
+    # --- Construct user slots ---
     user_slots = {"decodercontext": cut.custom.get("decodercontext", "")}
 
-    optional_slots = {
-        "emotion": "<|emo:undefined|>",
-        "itn": "<|noitn|>",
-        "timestamp": "<|notimestamp|>",
-        "diarize": "<|nodiarize|>",
-        "pnc": "<|pnc|>",  # consistent with canary1
-    }
+    # Handle boolean slots
+    for k in ("pnc", "itn", "diarize"):
+        true_token = f"<|{k}|>"
+        false_token = f"<|no{k}|>"
 
+        # Default for pnc is yes, for others no.
+        default_val = "yes" if k == "pnc" else "no"
+        val = cut.custom.get(k, default_val)
+
+        user_slots[k] = true_token if val in ("yes", "1", "True", "true", k) else false_token
+
+    user_slots["emotion"] = cut.custom.get("emotion", "<|emo:undefined|>")
+    user_slots["target_lang"] = f"<|{trgt_lang}|>"
+
+    # --- Construct assistant slots ---
     assistant_slots = {
         "source_lang": f"<|{src_lang}|>",
-        "target_lang": f"<|{trgt_lang}|>",
         "text": text,
-        "text_lang": ifnone(cut.supervisions[0].language, trgt_lang),
     }
 
-    for k, v in optional_slots.items():
-        assistant_slots[k] = cut.custom.get(k, v)
-
     turns = [dict(role="user", slots=user_slots), dict(role="assistant", slots=assistant_slots)]
-    # If data has no transcript, create empty response with <eos> only.
     ans = prompt.encode_dialog(turns)
+
     if isinstance(prompt.tokenizer, CanaryTokenizer) or isinstance(prompt.tokenizer, CanaryMultilingualTokenizer):
         eos = prompt.tokenizer.eos
     else:  # SPE
         eos = prompt.tokenizer.token_to_id(CANARY_EOS)  # type: ignore
     assert eos > -1, f"Invalid tokenizer: tokenizer.token_to_id('{CANARY_EOS}') returned {eos}"
+
     assert (
         ans["answer_ids"][-1].item() == eos
     ), f"Expected the last token in answer_ids to be EOS, but we got {ans['answer_ids']}"
+
     ans["answer_ids"] = ans["answer_ids"][:-1]  # Strip Canary's EOS
     return ans
