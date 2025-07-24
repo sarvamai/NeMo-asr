@@ -242,17 +242,16 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         self.setup_adapters()
 
         if cfg.get('parent_model', None) is not None:
-            is_cuda = torch.cuda.is_available()
-            map_location = 'cuda' if is_cuda else 'cpu'
+            map_location = self.device
             self.parent_model = EncDecMultiTaskModel.restore_from(cfg.parent_model, map_location=map_location)
 
             # Freeze the parent model's parameters
             for param in self.parent_model.parameters():
                 param.requires_grad = False
             self.parent_model.eval()
-            self.distill_loss = torch.nn.KLDivLoss(reduction='batchmean')
+            self.distill_loss = torch.nn.KLDivLoss(reduction='none')
             self.temperature = 2.0
-            print(">>>> Loaded parent model")
+            logging.info(">>>> Loaded parent model")
         else:
             self.parent_model = None
 
@@ -745,13 +744,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         tot_tokens = torch.as_tensor(batch.prompted_transcript.numel(), device=num_frames.device, dtype=torch.float)
 
         if self.parent_model is not None:
-            student_logits, encoded_len, enc_states, enc_mask = self.forward_for_distillation(
-                input_signal=batch.audio,
-                input_signal_length=batch.audio_lens,
-                transcript=input_ids,
-                transcript_length=input_ids_lens,
-            )
-            # Apply log_softmax manually to get log_probs for the audio loss
+            student_logits, encoded_len, enc_states, enc_mask = self.forward_for_distillation(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=input_ids, transcript_length=input_ids_lens)
             transf_log_probs = torch.nn.functional.log_softmax(student_logits, dim=-1)
         else:
             transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(
@@ -764,11 +757,11 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         # Mask components: 1) discard padding  &  2) discard prompt (notice the negation)
         # For a full decoder sequence O with len M, the loss mask skips the first element,
         # covering the remaining M-1 elements - hence we subtract 1 from prompt lens to account BOS.
+        maxlen = batch.prompted_transcript.shape[1] - 1
+        loss_mask = lens_to_mask(input_ids_lens, maxlen)
         if self.cfg.get("use_loss_mask_for_prompt", False):
-            maxlen = batch.prompted_transcript.shape[1] - 1
-            loss_mask = lens_to_mask(input_ids_lens, maxlen) & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
-        else:
-            loss_mask = None
+            loss_mask = loss_mask & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
+
         audio_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
 
         total_loss = audio_loss
@@ -777,26 +770,30 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         if self.parent_model is not None:
             with torch.no_grad():
                 # Parent model forward pass to get soft labels
-                parent_logits, _, _, _ = self.parent_model.forward_for_distillation(
-                    input_signal=batch.audio,
-                    input_signal_length=batch.audio_lens,
-                    transcript=input_ids,
-                    transcript_length=input_ids_lens,
-                )
+                parent_logits, _, _, _ = self.parent_model.forward_for_distillation(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=input_ids, transcript_length=input_ids_lens)
 
-                    
             # Apply temperature scaling to soften the probability distributions
             student_log_probs_distill = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
             parent_probs_distill = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
 
-            # Calculate distillation loss
-            distillation_loss = self.distill_loss(student_log_probs_distill, parent_probs_distill)
+            # breakpoint()
+
+            
+            # --------------- 1 --------------
+            # distillation_loss_unreduced = self.distill_loss(student_log_probs_distill, parent_probs_distill)
+            # # loss_mask needs to be expanded to match the shape of the loss tensor
+            # distillation_loss = distillation_loss_unreduced[loss_mask.unsqueeze(-1).expand_as(distillation_loss_unreduced)].mean()
+            
+            
+            distillation_loss_unreduced = self.distill_loss(student_log_probs_distill, parent_probs_distill).sum(dim=-1)
+            distillation_loss = (distillation_loss_unreduced * loss_mask).sum() / loss_mask.sum()
 
             # Apply the distillation weight from the config
-            distillation_weight = self.cfg.get("distillation_weight", 0.5)
+            kl_loss_weight = self.cfg.get("distillation_weight", 0.5)
+            ce_loss_weight = self.cfg.get("ce_loss_weight", 1.0)
             
             # Combine the losses
-            total_loss = (1.0 - distillation_weight) * audio_loss + distillation_weight * distillation_loss
+            total_loss = ce_loss_weight * audio_loss + kl_loss_weight * distillation_loss
 
         # Train step evaluation. From other asr models.
         if hasattr(self, '_trainer') and self._trainer is not None:
@@ -825,8 +822,8 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             'output_to_padding_ratio': num_tokens / tot_tokens,
         }
         if self.parent_model is not None:
-            log_dict['distillation_loss'] = distillation_loss
-            log_dict['audio_loss'] = audio_loss
+            log_dict['KL loss'] = distillation_loss
+            log_dict['CE loss'] = audio_loss
 
         metric_dict.update(log_dict)
         return {"loss": total_loss, "log": metric_dict}
@@ -908,7 +905,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                 logits = self.log_softmax.mlp(dec_states)
             else:
                 logits = self.log_softmax(hidden_states=dec_states)
-        
+
         # Return the logits needed for distillation
         return logits, encoded_len, enc_states, enc_mask
 
