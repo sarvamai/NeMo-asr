@@ -744,12 +744,21 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         tot_frames = torch.as_tensor(batch.audio.numel(), device=num_frames.device, dtype=torch.float)
         tot_tokens = torch.as_tensor(batch.prompted_transcript.numel(), device=num_frames.device, dtype=torch.float)
 
-        transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(
-            input_signal=batch.audio,
-            input_signal_length=batch.audio_lens,
-            transcript=input_ids,
-            transcript_length=input_ids_lens,
-        )
+        if self.parent_model is not None:
+            student_logits, encoded_len, enc_states, enc_mask = self.forward_for_distillation(
+                input_signal=batch.audio,
+                input_signal_length=batch.audio_lens,
+                transcript=input_ids,
+                transcript_length=input_ids_lens,
+            )
+            transf_log_probs = self.log_softmax(hidden_states=student_logits)
+        else:
+            transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(
+                input_signal=batch.audio,
+                input_signal_length=batch.audio_lens,
+                transcript=input_ids,
+                transcript_length=input_ids_lens,
+            )
 
         # Mask components: 1) discard padding  &  2) discard prompt (notice the negation)
         # For a full decoder sequence O with len M, the loss mask skips the first element,
@@ -759,15 +768,15 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             loss_mask = lens_to_mask(input_ids_lens, maxlen) & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
         else:
             loss_mask = None
-        transf_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
+        audio_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
 
-        total_loss = transf_loss
+        total_loss = audio_loss
         
         # --- Distillation Loss Calculation ---
         if self.parent_model is not None:
             with torch.no_grad():
                 # Parent model forward pass to get soft labels
-                parent_log_probs, _, _, _ = self.parent_model.forward(
+                parent_logits, _, _, _ = self.parent_model.forward_for_distillation(
                     input_signal=batch.audio,
                     input_signal_length=batch.audio_lens,
                     transcript=input_ids,
@@ -775,8 +784,8 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                 )
 
             # Apply temperature scaling to soften the probability distributions
-            student_log_probs_distill = torch.nn.functional.log_softmax(transf_log_probs / self.temperature, dim=-1)
-            parent_log_probs_distill = torch.nn.functional.softmax(parent_log_probs / self.temperature, dim=-1)
+            student_log_probs_distill = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
+            parent_log_probs_distill = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
 
             # Calculate distillation loss
             distillation_loss = self.distill_loss(student_log_probs_distill, parent_log_probs_distill)
@@ -785,7 +794,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             distillation_weight = self.cfg.get("distillation_weight", 0.5)
             
             # Combine the losses
-            total_loss = (1.0 - distillation_weight) * transf_loss + distillation_weight * distillation_loss
+            total_loss = (1.0 - distillation_weight) * audio_loss + distillation_weight * distillation_loss
 
         # Train step evaluation. From other asr models.
         if hasattr(self, '_trainer') and self._trainer is not None:
@@ -852,6 +861,51 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         )
         metric_dict[f"{eval_mode}_loss"] = transf_loss
         return metric_dict
+
+    def forward_for_distillation(
+        self,
+        input_signal,
+        input_signal_length,
+        transcript,
+        transcript_length,
+    ):
+        """
+        A forward pass specifically for training that returns raw logits 
+        instead of log probabilities, which is required for temperature scaling in distillation.
+        """
+        # --- Preprocessing and Augmentation ---
+        processed_signal, processed_signal_length = self.preprocessor(
+            input_signal=input_signal, length=input_signal_length
+        )
+
+        if self.spec_augmentation is not None and self.training:
+            processed_signal = self.spec_augmentation(input_spec=processed_signal, length=processed_signal_length)
+
+        # --- Encoder ---
+        encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
+
+        enc_states = encoded.permute(0, 2, 1)
+        enc_states = self.encoder_decoder_proj(enc_states)
+        enc_mask = lens_to_mask(encoded_len, enc_states.shape[1]).to(enc_states.dtype)
+        if self.use_transf_encoder:
+            enc_states = self.transf_encoder(encoder_states=enc_states, encoder_mask=enc_mask)
+
+        # --- Decoder (Stop before log_softmax) ---
+        logits = None
+        if transcript is not None:
+            dec_mask = lens_to_mask(transcript_length, transcript.shape[1]).to(transcript.dtype)
+            # dec_states are the raw logits before the final activation function
+            dec_states = self.transf_decoder(
+                input_ids=transcript, decoder_mask=dec_mask, encoder_embeddings=enc_states, encoder_mask=enc_mask
+            )
+            # Here we get the logits from the head, before log_softmax
+            if isinstance(self.log_softmax, TokenClassifier):
+                logits = self.log_softmax.mlp(dec_states)
+            else:
+                logits = self.log_softmax(hidden_states=dec_states)
+
+        # Return the logits needed for distillation
+        return logits, encoded_len, enc_states, enc_mask
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         metrics = self.validation_pass(batch, batch_idx, dataloader_idx, eval_mode="val")
