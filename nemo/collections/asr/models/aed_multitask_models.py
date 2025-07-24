@@ -813,17 +813,20 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             else {}
         )
 
-        metric_dict.update(
-            {
-                'train_loss': total_loss,
-                'learning_rate': torch.as_tensor(self._optimizer.param_groups[0]['lr']),
-                'batch_size': torch.as_tensor(batch.audio.shape[0]),
-                'num_frames': num_frames,
-                'num_tokens': num_tokens,
-                'input_to_padding_ratio': num_frames / tot_frames,
-                'output_to_padding_ratio': num_tokens / tot_tokens,
-            }
-        )
+        log_dict = {
+            'train_loss': total_loss,
+            'learning_rate': torch.as_tensor(self._optimizer.param_groups[0]['lr']),
+            'batch_size': torch.as_tensor(batch.audio.shape[0]),
+            'num_frames': num_frames,
+            'num_tokens': num_tokens,
+            'input_to_padding_ratio': num_frames / tot_frames,
+            'output_to_padding_ratio': num_tokens / tot_tokens,
+        }
+        if self.parent_model is not None:
+            log_dict['distillation_loss'] = distillation_loss
+            log_dict['audio_loss'] = audio_loss
+
+        metric_dict.update(log_dict)
         return {"loss": total_loss, "log": metric_dict}
 
     def validation_pass(self, batch: PromptedAudioToTextMiniBatch, batch_idx, dataloader_idx=0, eval_mode="val"):
