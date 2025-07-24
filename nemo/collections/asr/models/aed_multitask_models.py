@@ -127,6 +127,43 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         cfg = model_utils.convert_model_config_to_dict_config(cfg)
         cfg = model_utils.maybe_update_config_version(cfg)
         _config_check(cfg)
+        
+        
+        # HACK: If we are loading a checkpoint with an old prompt_defaults config,
+        # it will cause an assertion error with the new Canary2PromptFormatter.
+        # We will manually update the prompt_defaults to be compatible.
+        if cfg.get("prompt_format") == "canary2" and cfg.get("prompt_defaults") is not None:
+            new_defaults = []
+            defaults_changed = False
+            for turn in cfg.prompt_defaults:
+                if turn['role'] == 'user':
+                    # Check for old, invalid slots
+                    if 'source_lang' in turn['slots'] or 'timestamp' in turn['slots']:
+                        defaults_changed = True
+                        new_slots = {
+                            'decodercontext': turn['slots'].get('decodercontext', ''),
+                            'emotion': turn['slots'].get('emotion', '<|emo:undefined|>'),
+                            'pnc': turn['slots'].get('pnc', '<|pnc|>'),
+                            'itn': turn['slots'].get('itn', '<|noitn|>'),
+                            'diarize': turn['slots'].get('diarize', '<|nodiarize|>'),
+                            'target_lang': turn['slots'].get('target_lang', '<|en|>'),
+                        }
+                        new_defaults.append({'role': 'user', 'slots': new_slots})
+                    else:
+                        new_defaults.append(turn)
+                # Remove old user_partial if it exists
+                elif turn['role'] != 'user_partial':
+                    new_defaults.append(turn)
+                else:
+                    defaults_changed = True
+
+            if defaults_changed:
+                logging.warning(
+                    "Old `prompt_defaults` detected in the model config. "
+                    "Overriding with a compatible structure for Canary2 LID."
+                )
+                with open_dict(cfg):
+                    cfg.prompt_defaults = new_defaults
 
         self.prompt_format = cfg.prompt_format
         self.sample_rate = cfg.sample_rate
