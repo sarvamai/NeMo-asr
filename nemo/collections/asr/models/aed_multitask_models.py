@@ -784,19 +784,6 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                     transcript_length=input_ids_lens,
                 )
 
-            # Handle vocab size mismatch for distillation
-            student_vocab_size = student_logits.size(-1)
-            parent_vocab_size = parent_logits.size(-1)
-
-            if student_vocab_size != parent_vocab_size:
-                if student_vocab_size < parent_vocab_size:
-                    # Pad student logits to match parent
-                    padding_size = parent_vocab_size - student_vocab_size
-                    student_logits = torch.nn.functional.pad(student_logits, (0, padding_size), "constant", -1e9)
-                else:
-                    # Pad parent logits to match student
-                    padding_size = student_vocab_size - parent_vocab_size
-                    parent_logits = torch.nn.functional.pad(parent_logits, (0, padding_size), "constant", -1e9)
                     
             # Apply temperature scaling to soften the probability distributions
             student_log_probs_distill = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
