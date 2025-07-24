@@ -751,7 +751,8 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                 transcript=input_ids,
                 transcript_length=input_ids_lens,
             )
-            transf_log_probs = self.log_softmax(hidden_states=student_logits)
+            # Apply log_softmax manually to get log_probs for the audio loss
+            transf_log_probs = torch.nn.functional.log_softmax(student_logits, dim=-1)
         else:
             transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(
                 input_signal=batch.audio,
@@ -783,12 +784,26 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                     transcript_length=input_ids_lens,
                 )
 
+            # Handle vocab size mismatch for distillation
+            student_vocab_size = student_logits.size(-1)
+            parent_vocab_size = parent_logits.size(-1)
+
+            if student_vocab_size != parent_vocab_size:
+                if student_vocab_size < parent_vocab_size:
+                    # Pad student logits to match parent
+                    padding_size = parent_vocab_size - student_vocab_size
+                    student_logits = torch.nn.functional.pad(student_logits, (0, padding_size), "constant", -1e9)
+                else:
+                    # Pad parent logits to match student
+                    padding_size = student_vocab_size - parent_vocab_size
+                    parent_logits = torch.nn.functional.pad(parent_logits, (0, padding_size), "constant", -1e9)
+                    
             # Apply temperature scaling to soften the probability distributions
             student_log_probs_distill = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
-            parent_log_probs_distill = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
+            parent_probs_distill = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
 
             # Calculate distillation loss
-            distillation_loss = self.distill_loss(student_log_probs_distill, parent_log_probs_distill)
+            distillation_loss = self.distill_loss(student_log_probs_distill, parent_probs_distill)
 
             # Apply the distillation weight from the config
             distillation_weight = self.cfg.get("distillation_weight", 0.5)
@@ -906,7 +921,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
                 logits = self.log_softmax.mlp(dec_states)
             else:
                 logits = self.log_softmax(hidden_states=dec_states)
-
+        
         # Return the logits needed for distillation
         return logits, encoded_len, enc_states, enc_mask
 
