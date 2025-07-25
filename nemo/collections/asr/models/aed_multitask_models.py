@@ -758,11 +758,15 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         # For a full decoder sequence O with len M, the loss mask skips the first element,
         # covering the remaining M-1 elements - hence we subtract 1 from prompt lens to account BOS.
         maxlen = batch.prompted_transcript.shape[1] - 1
-        loss_mask = lens_to_mask(input_ids_lens, maxlen)
+        
         if self.cfg.get("use_loss_mask_for_prompt", False):
-            loss_mask = loss_mask & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
+            loss_mask_kl = loss_mask_kl & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
+            loss_mask_ce = lens_to_mask(input_ids_lens, maxlen) & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
+        else:
+            loss_mask_kl = lens_to_mask(input_ids_lens, maxlen)
+            loss_mask_ce = None
 
-        ce_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
+        ce_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask_ce)
 
         total_loss = ce_loss
         
@@ -784,7 +788,7 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
             # distillation_loss = distillation_loss_unreduced[loss_mask.unsqueeze(-1).expand_as(distillation_loss_unreduced)].mean()
             
             distillation_loss_unreduced = self.distill_loss(student_log_probs_distill, parent_probs_distill).sum(dim=-1)
-            kl_loss = (distillation_loss_unreduced * loss_mask).sum() / loss_mask.sum()
+            kl_loss = (distillation_loss_unreduced * loss_mask_kl).sum() / loss_mask_kl.sum()
 
             # Apply the distillation weight from the config
             kl_loss_weight = self.cfg.get("kl_loss_weight", 0.5)
