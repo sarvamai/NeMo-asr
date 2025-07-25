@@ -730,161 +730,68 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
 
         return transf_log_probs, encoded_len, enc_states, enc_mask
 
-    def forward_for_distillation(
-        self,
-        input_signal,
-        input_signal_length,
-        transcript,
-        transcript_length,
-    ):
-        """
-        A forward pass specifically for training that returns raw logits
-        instead of log probabilities, which is required for temperature scaling in distillation.
-        """
-        # --- Preprocessing and Augmentation ---
-        processed_signal, processed_signal_length = self.preprocessor(
-            input_signal=input_signal, length=input_signal_length
-        )
-
-        if self.spec_augmentation is not None and self.training:
-            processed_signal = self.spec_augmentation(input_spec=processed_signal, length=processed_signal_length)
-
-        # --- Encoder ---
-        encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
-
-        enc_states = encoded.permute(0, 2, 1)
-        enc_states = self.encoder_decoder_proj(enc_states)
-        enc_mask = lens_to_mask(encoded_len, enc_states.shape[1]).to(enc_states.dtype)
-        if self.use_transf_encoder:
-            enc_states = self.transf_encoder(encoder_states=enc_states, encoder_mask=enc_mask)
-
-        # --- Decoder (Stop before log_softmax) ---
-        logits = None
-        if transcript is not None:
-            dec_mask = lens_to_mask(transcript_length, transcript.shape[1]).to(transcript.dtype)
-            # dec_states are the raw logits before the final activation function
-            dec_states = self.transf_decoder(
-                input_ids=transcript, decoder_mask=dec_mask, encoder_embeddings=enc_states, encoder_mask=enc_mask
-            )
-            # Here we get the logits from the head, before log_softmax
-            if isinstance(self.log_softmax, TokenClassifier):
-                logits = self.log_softmax.mlp(dec_states)
-            else:
-                # Assuming the log_softmax module has a `forward` that can return logits
-                # This might need adjustment depending on the exact implementation of the module
-                logits = self.log_softmax(hidden_states=dec_states, return_logits=True)
-
-        # Return the logits needed for distillation
-        return logits, encoded_len, enc_states, enc_mask
-
     # PTL-specific methods
     def training_step(self, batch: PromptedAudioToTextMiniBatch, batch_nb):
         if batch is None:
             return torch.tensor([0.0])
 
-        # Get original inputs/labels from batch
-        original_input_ids, original_labels = batch.get_decoder_inputs_outputs()
-        original_input_ids_lens = batch.prompted_transcript_lens - 1
+        input_ids, labels = batch.get_decoder_inputs_outputs()
+        input_ids_lens = batch.prompted_transcript_lens - 1
 
         num_frames = batch.audio_lens.sum().float()
+        num_tokens = batch.prompted_transcript_lens.sum().float()
         tot_frames = torch.as_tensor(batch.audio.numel(), device=num_frames.device, dtype=torch.float)
+        tot_tokens = torch.as_tensor(batch.prompted_transcript.numel(), device=num_frames.device, dtype=torch.float)
 
         if self.parent_model is not None:
-            # --- 1. Pseudo-labeling with parent model to get decoder sequence and parent logits ---
+            student_logits, encoded_len, enc_states, enc_mask = self.forward_for_distillation(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=input_ids, transcript_length=input_ids_lens)
+            transf_log_probs = torch.nn.functional.log_softmax(student_logits, dim=-1)
+        else:
+            transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(
+                input_signal=batch.audio,
+                input_signal_length=batch.audio_lens,
+                transcript=input_ids,
+                transcript_length=input_ids_lens,
+            )
+
+        # Mask components: 1) discard padding  &  2) discard prompt (notice the negation)
+        # For a full decoder sequence O with len M, the loss mask skips the first element,
+        # covering the remaining M-1 elements - hence we subtract 1 from prompt lens to account BOS.
+        maxlen = batch.prompted_transcript.shape[1] - 1
+        loss_mask = lens_to_mask(input_ids_lens, maxlen)
+        if self.cfg.get("use_loss_mask_for_prompt", False):
+            loss_mask = loss_mask & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
+
+        ce_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
+
+        total_loss = ce_loss
+        
+        # --- Distillation Loss Calculation ---
+        if self.parent_model is not None:
             with torch.no_grad():
-                # Parent model inference to get pseudo-labels
-                
-                # breakpoint()
-                
-                parent_processed_signal, parent_processed_signal_length = self.parent_model.preprocessor(input_signal=batch.audio, length=batch.audio_lens)
-                parent_encoded, parent_encoded_len = self.parent_model.encoder(audio_signal=parent_processed_signal, length=parent_processed_signal_length)
-                parent_enc_states = parent_encoded.permute(0, 2, 1)
-                parent_enc_states = self.parent_model.encoder_decoder_proj(parent_enc_states)
-                parent_enc_mask = lens_to_mask(parent_encoded_len, parent_enc_states.shape[1]).to(parent_enc_states.dtype)
-                if self.parent_model.use_transf_encoder:
-                    parent_enc_states = self.parent_model.transf_encoder(encoder_states=parent_enc_states, encoder_mask=parent_enc_mask)
+                # Parent model forward pass to get soft labels
+                parent_logits, _, _, _ = self.parent_model.forward_for_distillation(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=input_ids, transcript_length=input_ids_lens)
 
-                # Parent pseudolabeling
-                parent_hypotheses = self.parent_model.decoding.decode_predictions_tensor(encoder_hidden_states=parent_enc_states,encoder_input_mask=parent_enc_mask, decoder_input_ids=batch.prompt, return_hypotheses=True)
+            # Apply temperature scaling to soften the probability distributions
+            student_log_probs_distill = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
+            parent_probs_distill = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
 
-                # Making pseudo-labels for student
-                new_prompted_transcripts = []
-                for i in range(len(batch.prompt)):
-                    prompt_tokens = batch.prompt[i][: batch.prompt_lens[i]]
-                    answer_tokens = parent_hypotheses[i].y_sequence.to(batch.audio.device)
-                    new_prompted_transcript = torch.cat([prompt_tokens, answer_tokens], dim=0)
-                    new_prompted_transcripts.append(new_prompted_transcript)
+            # breakpoint()
 
-                pseudo_transcript_lens = torch.tensor([len(t) for t in new_prompted_transcripts], device=batch.audio.device)
-                pseudo_transcript = torch.nn.utils.rnn.pad_sequence(new_prompted_transcripts, batch_first=True, padding_value=self.tokenizer.pad_id)
-
-                # getting pseudo_input_ids and lengths
-                pseudo_input_ids = pseudo_transcript[:, :-1]
-                pseudo_labels = pseudo_transcript[:, 1:]
-                pseudo_input_ids_lens = pseudo_transcript_lens - 1
-
-                # Getting parent logits
-                dec_mask = lens_to_mask(pseudo_input_ids_lens, pseudo_input_ids.shape[1]).to(parent_enc_states.dtype)
-                dec_states = self.parent_model.transf_decoder(input_ids=pseudo_input_ids, decoder_mask=dec_mask, encoder_embeddings=parent_enc_states, encoder_mask=parent_enc_mask)
-                
-                if isinstance(self.parent_model.log_softmax, TokenClassifier):
-                    parent_logits = self.parent_model.log_softmax.mlp(dec_states)
-                else:
-                    parent_logits = self.parent_model.log_softmax(hidden_states=dec_states, return_logits=True)
-
-            # student Logits for kl_loss
-            student_logits, _, _, _ = self.forward_for_distillation(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=pseudo_input_ids, transcript_length=pseudo_input_ids_lens)
-            student_log_probs = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
-            parent_probs = torch.nn.functional.softmax(parent_logits / self.temperature, dim=-1)
+            # --------------- 1 --------------
+            # distillation_loss_unreduced = self.distill_loss(student_log_probs_distill, parent_probs_distill)
+            # # loss_mask needs to be expanded to match the shape of the loss tensor
+            # distillation_loss = distillation_loss_unreduced[loss_mask.unsqueeze(-1).expand_as(distillation_loss_unreduced)].mean()
             
-            # student logits for ce_loss
-            fwd_pass_original_log_probs, encoded_len, enc_states, enc_mask = self.forward(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=original_input_ids, transcript_length=original_input_ids_lens)
+            distillation_loss_unreduced = self.distill_loss(student_log_probs_distill, parent_probs_distill).sum(dim=-1)
+            kl_loss = (distillation_loss_unreduced * loss_mask).sum() / loss_mask.sum()
 
-            maxlen_pseudo = pseudo_transcript.shape[1] - 1
-            loss_mask_pseudo = lens_to_mask(pseudo_input_ids_lens, maxlen_pseudo)
-            if self.cfg.get("use_loss_mask_for_prompt", False):
-                 loss_mask_pseudo = loss_mask_pseudo & ~lens_to_mask(batch.prompt_lens - 1, maxlen_pseudo)
-            
-            maxlen_orig = original_labels.shape[1]
-            loss_mask_orig = lens_to_mask(original_input_ids_lens, maxlen_orig)
-            if self.cfg.get("use_loss_mask_for_prompt", False):
-                loss_mask_orig = loss_mask_orig & ~lens_to_mask(batch.prompt_lens - 1, maxlen_orig)
-            
-            
-            #calculating losses
-            distillation_loss_unreduced = self.distill_loss(student_log_probs, parent_probs).sum(dim=-1)
-            kl_loss = (distillation_loss_unreduced * loss_mask_pseudo).sum() / loss_mask_pseudo.sum()
-
-            ce_loss = self.loss(log_probs=fwd_pass_original_log_probs, labels=original_labels, output_mask=loss_mask_orig)
-
-            # calculate toral loss
+            # Apply the distillation weight from the config
             kl_loss_weight = self.cfg.get("kl_loss_weight", 0.5)
             ce_loss_weight = self.cfg.get("ce_loss_weight", 1.0)
+            
+            # Combine the losses
             total_loss = ce_loss_weight * ce_loss + kl_loss_weight * kl_loss
-
-
-            # num_tokens = batch.prompted_transcript_lens.sum().float()
-            # tot_tokens = torch.as_tensor(batch.prompted_transcript.numel(), device=num_frames.device, dtype=torch.float)
-
-        else:
-            # Original training path when no parent model is present
-            input_ids, labels = batch.get_decoder_inputs_outputs()
-            input_ids_lens = batch.prompted_transcript_lens - 1
-            # num_tokens = batch.prompted_transcript_lens.sum().float()
-            # tot_tokens = torch.as_tensor(batch.prompted_transcript.numel(), device=num_frames.device, dtype=torch.float)
-
-            transf_log_probs, encoded_len, enc_states, enc_mask = self.forward(input_signal=batch.audio, input_signal_length=batch.audio_lens, transcript=input_ids, transcript_length=input_ids_lens)
-
-            # Mask components: 1) discard padding  &  2) discard prompt (notice the negation)
-            # For a full decoder sequence O with len M, the loss mask skips the first element,
-            # covering the remaining M-1 elements - hence we subtract 1 from prompt lens to account BOS.
-            maxlen = batch.prompted_transcript.shape[1] - 1
-            loss_mask = lens_to_mask(input_ids_lens, maxlen)
-            if self.cfg.get("use_loss_mask_for_prompt", False):
-                loss_mask = loss_mask & ~lens_to_mask(batch.prompt_lens - 1, maxlen)
-
-            ce_loss = self.loss(log_probs=transf_log_probs, labels=labels, output_mask=loss_mask)
-            total_loss = ce_loss
 
         # Train step evaluation. From other asr models.
         if hasattr(self, '_trainer') and self._trainer is not None:
@@ -904,9 +811,11 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         )
         
         if (batch_nb + 1) % log_every_n_steps == 0:
-            if self.parent_model is not None:
+            if self.parent_model:
                 logging.info(f"kl_loss: {kl_loss} | ce_loss: {ce_loss} | total_loss: {total_loss}")
-
+            else:
+                logging.info(f"total_loss: {total_loss}")
+        
         log_dict = {
             'train_loss': total_loss,
             'learning_rate': torch.as_tensor(self._optimizer.param_groups[0]['lr']),
@@ -958,6 +867,51 @@ class EncDecMultiTaskModel(ASRModel, ExportableEncDecModel, ASRBPEMixin, ASRModu
         )
         metric_dict[f"{eval_mode}_loss"] = transf_loss
         return metric_dict
+
+    def forward_for_distillation(
+        self,
+        input_signal,
+        input_signal_length,
+        transcript,
+        transcript_length,
+    ):
+        """
+        A forward pass specifically for training that returns raw logits 
+        instead of log probabilities, which is required for temperature scaling in distillation.
+        """
+        # --- Preprocessing and Augmentation ---
+        processed_signal, processed_signal_length = self.preprocessor(
+            input_signal=input_signal, length=input_signal_length
+        )
+
+        if self.spec_augmentation is not None and self.training:
+            processed_signal = self.spec_augmentation(input_spec=processed_signal, length=processed_signal_length)
+
+        # --- Encoder ---
+        encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
+
+        enc_states = encoded.permute(0, 2, 1)
+        enc_states = self.encoder_decoder_proj(enc_states)
+        enc_mask = lens_to_mask(encoded_len, enc_states.shape[1]).to(enc_states.dtype)
+        if self.use_transf_encoder:
+            enc_states = self.transf_encoder(encoder_states=enc_states, encoder_mask=enc_mask)
+
+        # --- Decoder (Stop before log_softmax) ---
+        logits = None
+        if transcript is not None:
+            dec_mask = lens_to_mask(transcript_length, transcript.shape[1]).to(transcript.dtype)
+            # dec_states are the raw logits before the final activation function
+            dec_states = self.transf_decoder(
+                input_ids=transcript, decoder_mask=dec_mask, encoder_embeddings=enc_states, encoder_mask=enc_mask
+            )
+            # Here we get the logits from the head, before log_softmax
+            if isinstance(self.log_softmax, TokenClassifier):
+                logits = self.log_softmax.mlp(dec_states)
+            else:
+                logits = self.log_softmax(hidden_states=dec_states)
+
+        # Return the logits needed for distillation
+        return logits, encoded_len, enc_states, enc_mask
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         metrics = self.validation_pass(batch, batch_idx, dataloader_idx, eval_mode="val")
